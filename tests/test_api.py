@@ -285,6 +285,17 @@ class ApiTests(unittest.TestCase):
         last = acc.req("GET", "/api/chat/messages?c=all")[1]["messages"][-1]
         self.assertEqual((last["body"], last["sender"], last["gone"]), ("bye all", 0, True))
 
+    def test_login_with_display_name(self):
+        boss = self.as_("boss")
+        self.assertEqual(boss.req("POST", "/api/users", {"username": "smart", "display_name": "sltch", "password": PW, "role": "user", "depts": ["HR"]})[0], 200)
+        self.assertEqual(Client(self.port).login("smart")[0], 200)
+        self.assertEqual(Client(self.port).req("POST", "/api/login", {"username": " SLTCH ", "password": PW})[0], 200)
+        self.assertEqual(Client(self.port).req("POST", "/api/login", {"username": "sltch", "password": "wrong-pass"})[0], 401)
+        # two people with the same display name: ambiguous, so only the login name works
+        boss.req("POST", "/api/users", {"username": "smart2", "display_name": "sltch", "password": PW, "role": "user", "depts": []})
+        self.assertEqual(Client(self.port).req("POST", "/api/login", {"username": "sltch", "password": PW})[0], 401)
+        self.assertEqual(Client(self.port).login("smart2")[0], 200)
+
     def test_profile_picture(self):
         c = self.as_("ed")
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 200

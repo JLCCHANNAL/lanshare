@@ -533,7 +533,7 @@ async function loadUsers() {
       users.map((u) => {
         const canEdit = me.role === 'superadmin' || u.role === 'user';
         const depts = u.role === 'user' ? (u.depts.length ? u.depts.map((d) => `<span class="chip">${esc(d)}</span>`).join('') : '<span class="muted">ยังไม่มี</span>') : '<span class="muted">ทุกโฟลเดอร์</span>';
-        return `<tr><td><div class="who"><span class="avatar">${avatarInner(u)}</span><div><b>${esc(u.display_name)}</b><small>${esc(u.username)}</small></div></div></td>
+        return `<tr><td><div class="who"><span class="avatar">${avatarInner(u)}</span><div><b>${esc(u.display_name)}</b><small>ชื่อเข้าระบบ <code>${esc(u.username)}</code></small></div></div></td>
           <td><span class="badge ${u.role}">${ROLE[u.role]}</span></td><td><div class="chips">${depts}</div></td>
           <td>${u.active ? '<span class="badge user">ใช้งาน</span>' : '<span class="badge off">ปิดใช้งาน</span>'}</td>
           <td class="actions">${canEdit ? `<button class="btn ghost" data-edit="${u.id}">${icon('edit')}แก้ไข</button>` : ''}
@@ -548,13 +548,24 @@ async function loadUsers() {
   } catch (e) { fail(e); }
 }
 $('#addUserBtn').onclick = () => userForm(null);
+function newUserInfo(username, display) {
+  const url = `${location.protocol}//${location.host}`;
+  modal(`<h3>เพิ่มผู้ใช้แล้ว ✓</h3><p class="desc">ส่งข้อมูลนี้ให้ ${esc(display || username)} เพื่อเข้าสู่ระบบ</p>
+    <div class="handoff">
+      <div><span>เปิดหน้าเว็บ</span><code>${esc(url)}</code></div>
+      <div><span>ชื่อผู้ใช้</span><code class="big">${esc(username)}</code></div>
+      <div><span>รหัสผ่าน</span><b>รหัสที่คุณเพิ่งตั้ง</b></div>
+    </div>
+    <p class="readonly-note">${icon('info')}ต้องพิมพ์ <b>ชื่อผู้ใช้</b> ด้านบน (หรือชื่อที่แสดง) ด้วยคีย์บอร์ดภาษาอังกฤษ และแนะนำให้เปลี่ยนรหัสหลังเข้าครั้งแรก</p>
+    <div class="actions"><button class="btn primary" data-close>เสร็จ</button></div>`);
+}
 async function userForm(u) {
   await loadDepts();
   const me = state.me, isNew = !u;
   const roles = me.role === 'superadmin' ? Object.keys(ROLE) : ['user'];
   const { m, close } = modal(`<form><h3>${isNew ? 'เพิ่มผู้ใช้' : 'แก้ไขผู้ใช้ ' + esc(u.username)}</h3>
     <p class="desc">${isNew ? 'ตั้งรหัสผ่านชั่วคราว แล้วแจ้งผู้ใช้ให้เปลี่ยนเองหลังเข้าสู่ระบบ' : 'เว้นช่องรหัสผ่านว่างไว้ถ้าไม่ต้องการเปลี่ยน'}</p>
-    ${isNew ? `<label class="field"><span>ชื่อผู้ใช้ (ใช้เข้าสู่ระบบ)</span><input name="username" required autofocus pattern="[a-z0-9][a-z0-9._-]{1,31}" placeholder="เช่น somchai"><small>a-z, 0-9, จุด, ขีด · ยาว 2–32 ตัว</small></label>` : ''}
+    ${isNew ? `<label class="field"><span>ชื่อผู้ใช้ (ใช้เข้าสู่ระบบ)</span><input name="username" required autofocus autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[a-z0-9][a-z0-9._-]{1,31}" placeholder="เช่น somchai"><small>a-z, 0-9, จุด, ขีด · ยาว 2–32 ตัว</small></label>` : ''}
     <label class="field"><span>ชื่อที่แสดง</span><input name="display" value="${esc(u?.display_name || '')}" placeholder="เช่น สมชาย ใจดี" ${isNew ? '' : 'autofocus'}></label>
     <label class="field"><span>${isNew ? 'รหัสผ่าน' : 'ตั้งรหัสผ่านใหม่'}</span><input name="password" type="password" autocomplete="new-password" minlength="8" ${isNew ? 'required' : ''}><small>อย่างน้อย 8 ตัว</small></label>
     <label class="field"><span>บทบาท</span><select name="role" ${roles.length === 1 ? 'disabled' : ''}>${roles.map((r) => `<option value="${r}" ${(u?.role || 'user') === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}</select><small id="roleHelp"></small></label>
@@ -573,7 +584,8 @@ async function userForm(u) {
     try {
       if (isNew) await api('/api/users', { method: 'POST', json: { ...body, username: f.username.value.trim().toLowerCase(), role: f.role.value } });
       else await api(`/api/users/${u.id}/update`, { method: 'POST', json: body });
-      close(); toast(isNew ? 'เพิ่มผู้ใช้แล้ว' : 'บันทึกแล้ว', 'ok'); loadUsers();
+      close(); loadUsers();
+      if (isNew) newUserInfo(f.username.value.trim().toLowerCase(), f.display.value.trim()); else toast('บันทึกแล้ว', 'ok');
     } catch (err) { fail(err); }
   };
 }

@@ -536,4 +536,9 @@ h2 { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
 .mode-card > i { position: absolute; top: 12px; right: 12px; font-style: normal; }
 .readonly-note.warn { background: rgb(183 121 31 / .12); }
 .readonly-note.warn svg { color: var(--warn); }
-@media (max-width: 760px) { .net-mode { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .net-mode { grid-template-columns: 1fr; } }.handoff { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 14px; }
+.handoff div { display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: center; padding: 10px 14px; background: var(--surface); }
+.handoff span { color: var(--muted); font-size: 13px; }
+.handoff code { justify-self: start; }
+.handoff code.big { font-size: 17px; font-weight: 700; padding: 3px 10px; }
+.table .who small code { font-size: 12px; }

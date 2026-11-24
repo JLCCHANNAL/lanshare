@@ -536,10 +536,17 @@ class Handler(BaseHTTPRequestHandler):
         key = f"{self.client_address[0]}|{username}"
         if throttled(key):
             raise ApiError(429, "ใส่รหัสผิดหลายครั้ง กรุณารอ 5 นาทีแล้วลองใหม่")
+        typed = str(body.get("username", "")).strip()
         with db() as con:
             row = con.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-        if not row or not row["active"] or not verify_password(str(body.get("password", "")), row["pw_hash"]):
+            if not row:   # people often type the name they see in the list (display name) — accept it when unique
+                rows = con.execute("SELECT * FROM users WHERE lower(display_name)=lower(?)", (typed,)).fetchall()
+                row = rows[0] if len(rows) == 1 else None
+        reason = ("no such user" if not row else "account disabled" if not row["active"]
+                  else "" if verify_password(str(body.get("password", "")), row["pw_hash"]) else "wrong password")
+        if reason:
             record_fail(key)
+            sys.stderr.write(f"login failed for {typed[:40]!r} from {self.client_address[0]}: {reason}\n")
             raise ApiError(401, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
         tok = secrets.token_urlsafe(32)
         with _db_lock, db() as con:
