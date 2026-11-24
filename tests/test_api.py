@@ -224,6 +224,67 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(s, 400)
         self.assertIn("คนสุดท้าย", r["error"])
 
+    def uid(self, client):
+        return client.req("GET", "/api/me")[1]["user"]["id"]
+
+    def test_chat_rooms_and_permissions(self):
+        acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
+        convs = [c["id"] for c in acc.req("GET", "/api/chat/convs")[1]["convs"]]
+        self.assertEqual(convs[:1], ["all"])
+        self.assertIn("dept:Accounting", convs)
+        self.assertNotIn("dept:HR", convs)
+        self.assertEqual(acc.req("GET", "/api/chat/messages?c=dept:HR")[0], 403)
+        self.assertEqual(acc.req("POST", "/api/chat/send", {"c": "dept:HR", "body": "x"})[0], 403)
+        self.assertEqual(acc.req("POST", "/api/chat/send", {"c": "dept:Nope", "body": "x"})[0], 403)
+        self.assertEqual(acc.req("POST", "/api/chat/send", {"c": "all", "body": "   "})[0], 400)
+        self.assertEqual(acc.req("POST", "/api/chat/send", {"c": "all", "body": "x" * 2001})[0], 400)
+        s, r = acc.req("POST", "/api/chat/send", {"c": "dept:Accounting", "body": "งบ Q4 อยู่ใน Accounting นะ"})
+        self.assertEqual(s, 200, r)
+        self.assertEqual(ed.req("GET", "/api/chat/messages?c=dept:Accounting")[1]["messages"][-1]["body"], "งบ Q4 อยู่ใน Accounting นะ")
+        self.assertEqual(hr.req("GET", "/api/chat/messages?c=dept:Accounting")[0], 403)
+
+    def test_chat_direct_messages_unread_and_live(self):
+        acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
+        a, h = self.uid(acc), self.uid(hr)
+        dm = f"dm:{min(a, h)}-{max(a, h)}"
+        # hr listens on the live channel
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/chat/events", headers={"Cookie": hr.cookie})
+        live = conn.getresponse()
+        self.assertEqual(live.status, 200)
+        got = b""
+        while b"event: ready" not in got:
+            got += live.readline()
+        s, r = acc.req("POST", "/api/chat/send", {"c": dm, "body": "สวัสดี <b>hr</b>"})
+        self.assertEqual(s, 200, r)
+        deadline, got = time.time() + 5, b""
+        while time.time() < deadline and b"event: msg" not in got:
+            got += live.readline()
+        got += live.readline()
+        self.assertIn("สวัสดี <b>hr</b>".encode(), got)                  # stored as text; the page escapes it
+        conn.close()
+        item = next(c for c in hr.req("GET", "/api/chat/convs")[1]["convs"] if c["id"] == dm)
+        self.assertEqual((item["kind"], item["unread"]), ("dm", 1))
+        self.assertEqual(hr.req("POST", "/api/chat/read", {"c": dm})[0], 200)
+        item = next(c for c in hr.req("GET", "/api/chat/convs")[1]["convs"] if c["id"] == dm)
+        self.assertEqual(item["unread"], 0)
+        # a third person can neither read nor write it, nor spoof a pair they are not in
+        self.assertEqual(ed.req("GET", f"/api/chat/messages?c={dm}")[0], 403)
+        self.assertEqual(ed.req("POST", "/api/chat/send", {"c": dm, "body": "x"})[0], 403)
+        self.assertEqual(acc.req("POST", "/api/chat/send", {"c": f"dm:{max(a, h)}-{min(a, h)}", "body": "x"})[0], 403)
+
+    def test_chat_forgotten_when_account_deleted(self):
+        server.create_user_cli("temp1", "user", ["Common"])
+        t, acc = self.as_("temp1"), self.as_("acc")
+        ti, ai = self.uid(t), self.uid(acc)
+        dm = f"dm:{min(ti, ai)}-{max(ti, ai)}"
+        t.req("POST", "/api/chat/send", {"c": dm, "body": "private"})
+        t.req("POST", "/api/chat/send", {"c": "all", "body": "bye all"})
+        self.assertEqual(t.req("POST", "/api/me/delete", {"password": PW})[0], 200)
+        self.assertNotIn(dm, [c["id"] for c in acc.req("GET", "/api/chat/convs")[1]["convs"]])
+        last = acc.req("GET", "/api/chat/messages?c=all")[1]["messages"][-1]
+        self.assertEqual((last["body"], last["sender"], last["gone"]), ("bye all", 0, True))
+
     def test_profile_picture(self):
         c = self.as_("ed")
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 200

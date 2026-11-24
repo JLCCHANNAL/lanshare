@@ -126,6 +126,7 @@ function look(update) {
 function showLogin() {
   $('#app').hidden = true; $('#login').hidden = false;
   state.es?.close(); state.es = null;
+  chat.es?.close(); chat.es = null; chat.convs = []; chat.conv = null;
   setTimeout(() => $('#lgUser').focus(), 30);
 }
 $('#loginForm').onsubmit = async (e) => {
@@ -252,6 +253,8 @@ async function start(user) {
   $('#netNav').hidden = user.role !== 'superadmin';
   await loadDepts();
   route();
+  chatConnect();
+  refreshConvs();
 }
 
 // ------------------------------------------------------------------ navigation
@@ -260,6 +263,7 @@ function route() {
   if (h === 'users' && state.me.role !== 'user') return showView('users');
   if (h === 'recycle' && state.me.role !== 'user') return showView('recycle');
   if (h === 'network' && state.me.role === 'superadmin') return showView('network');
+  if (h === 'chat' || h.startsWith('chat/')) return showView('chat', h.slice(5) || null);
   showView('files', h.startsWith('/') ? h : '/');
 }
 window.addEventListener('hashchange', () => state.me && route());
@@ -271,13 +275,17 @@ function showView(view, path) {
   $('#viewUsers').hidden = view !== 'users';
   $('#viewRecycle').hidden = view !== 'recycle';
   $('#viewNetwork').hidden = view !== 'network';
+  $('#viewChat').hidden = view !== 'chat';
+  $('#main').classList.toggle('is-chat', view === 'chat');
+  if (view !== 'chat') { chat.conv = null; paintUnread(); }
   $('#search').parentElement.hidden = view !== 'files';
   closeNav();
   if (view === 'files') openFolder(path);
-  else { state.es?.close(); state.es = null; setLive(false); }
+  else { state.es?.close(); state.es = null; setLive(chat.es?.readyState === 1); }
   if (view === 'users') loadUsers();
   if (view === 'recycle') loadRecycle();
   if (view === 'network') loadNetwork();
+  if (view === 'chat') openChat(path);
   markNav();
 }
 function markNav() {
@@ -589,6 +597,174 @@ async function loadRecycle() {
     }));
   } catch (e) { fail(e); }
 }
+
+// ------------------------------------------------------------------ chat (rooms + direct messages, live over SSE)
+const chat = { convs: [], people: [], conv: null, msgs: [], more: false, es: null };
+const dmId = (pid) => `dm:${Math.min(pid, state.me.id)}-${Math.max(pid, state.me.id)}`;
+const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+function chatDay(ts) {
+  const d = new Date(ts * 1000), t = new Date(); t.setHours(0, 0, 0, 0);
+  const diff = Math.round((t - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (diff === 0) return 'วันนี้';
+  if (diff === 1) return 'เมื่อวาน';
+  return d.toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
+}
+const shortWhen = (ts) => (chatDay(ts) === 'วันนี้' ? hhmm(ts) : chatDay(ts).replace(/^[^ ]+ /, ''));
+const linkify = (html) => html.replace(/\bhttps?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+
+function chatConnect() {
+  chat.es?.close();
+  const es = new EventSource('/api/chat/events');
+  chat.es = es;
+  es.addEventListener('msg', (e) => onChatMsg(JSON.parse(e.data)));
+  es.onopen = () => { if (state.view !== 'files') setLive(true); };
+  es.onerror = () => { if (state.view !== 'files') setLive(false); };
+}
+async function refreshConvs() {
+  try { const r = await api('/api/chat/convs'); chat.convs = r.convs; chat.people = r.people; } catch (e) { return; }
+  paintUnread();
+  if (state.view === 'chat') renderConvs();
+}
+function paintUnread() {
+  const n = chat.convs.reduce((s, c) => s + (state.view === 'chat' && c.id === chat.conv ? 0 : c.unread), 0);
+  $('#chatUnread').hidden = !n;
+  $('#chatUnread').textContent = n > 99 ? '99+' : n;
+  document.title = (n ? `(${n}) ` : '') + state.org.name;
+}
+function onChatMsg(m) {
+  const mine = m.sender === state.me.id;
+  const viewing = state.view === 'chat' && chat.conv === m.conv;
+  const c = chat.convs.find((x) => x.id === m.conv);
+  if (!c) refreshConvs();                                   // first message of a new private chat
+  else { c.last = m; if (!mine && !(viewing && !document.hidden)) c.unread++; }
+  if (viewing && !chat.msgs.some((x) => x.id === m.id)) { chat.msgs.push(m); renderMsgs(); if (!mine && !document.hidden) markRead(m.conv); }
+  if (!mine && !viewing) toast(`💬 ${m.name}: ${m.body.length > 90 ? m.body.slice(0, 90) + '…' : m.body}`, 'info');
+  paintUnread();
+  if (state.view === 'chat') renderConvs();
+}
+async function markRead(conv) {
+  const c = chat.convs.find((x) => x.id === conv);
+  if (c) c.unread = 0;
+  paintUnread();
+  try { await api('/api/chat/read', { method: 'POST', json: { c: conv } }); } catch (e) { /* ignore */ }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.view === 'chat' && chat.conv) markRead(chat.conv); });
+
+function convInfo(id) {
+  let c = chat.convs.find((x) => x.id === id);
+  if (!c && id && id.startsWith('dm:')) {
+    const [a, b] = id.slice(3).split('-').map(Number), pid = a === state.me.id ? b : a;
+    const p = chat.people.find((x) => x.id === pid);
+    if (p) c = { id, kind: 'dm', title: p.display_name, peer: p, unread: 0, last: null };
+  }
+  return c;
+}
+const convAvatar = (c) => (c.kind === 'dm'
+  ? `<span class="avatar">${c.peer ? avatarInner(c.peer) : '?'}</span>`
+  : `<span class="avatar room ${c.kind}">${icon(c.kind === 'all' ? 'users' : 'folder')}</span>`);
+
+function renderConvs() {
+  const list = [...chat.convs];
+  const cur = convInfo(chat.conv);
+  if (cur && !list.includes(cur)) list.push(cur);
+  const item = (c) => {
+    const who = !c.last ? '' : c.last.sender === state.me.id ? 'คุณ: ' : c.kind === 'dm' ? '' : c.last.name + ': ';
+    return `<button class="conv ${c.id === chat.conv ? 'on' : ''}" data-conv="${esc(c.id)}">${convAvatar(c)}
+      <span class="conv-body"><span class="conv-top"><b>${esc(c.title)}</b>${c.last ? `<small>${shortWhen(c.last.ts)}</small>` : ''}</span>
+      <span class="conv-last">${c.last ? esc(who + c.last.body) : '<i>ยังไม่มีข้อความ</i>'}</span></span>
+      ${c.unread && c.id !== chat.conv ? `<span class="pill">${c.unread}</span>` : ''}</button>`;
+  };
+  const rooms = list.filter((c) => c.kind !== 'dm'), dms = list.filter((c) => c.kind === 'dm');
+  $('#convList').innerHTML = `<p class="conv-label">ห้องแชท</p>${rooms.map(item).join('')}
+    <p class="conv-label">ข้อความส่วนตัว</p>${dms.map(item).join('') || '<p class="muted conv-empty">กด “แชทใหม่” เพื่อคุยกับเพื่อนร่วมงานหรือผู้ดูแล</p>'}`;
+  $$('#convList [data-conv]').forEach((b) => (b.onclick = () => { location.hash = 'chat/' + b.dataset.conv; }));
+}
+function renderHead() {
+  const c = convInfo(chat.conv);
+  const sub = c.kind === 'all' ? 'ทุกคนในองค์กรเห็นข้อความในห้องนี้' : c.kind === 'dept' ? `ทุกคนที่เข้าโฟลเดอร์ ${c.title} ได้` : c.peer ? `ข้อความส่วนตัว · ${ROLE[c.peer.role]}` : 'ข้อความส่วนตัว';
+  $('#chatHead').innerHTML = `<button class="icon-btn chat-back" id="chatBack" aria-label="กลับ">${icon('back')}</button>${convAvatar(c)}
+    <div class="chat-title"><b>${esc(c.title)}</b><small>${esc(sub)}</small></div>`;
+  $('#chatBack').onclick = () => { location.hash = 'chat'; };
+}
+function renderMsgs(keepTop) {
+  const box = $('#chatMsgs');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  const oldH = box.scrollHeight, oldTop = box.scrollTop;
+  const dm = convInfo(chat.conv)?.kind === 'dm';
+  let html = chat.more ? `<div class="chat-more"><button class="btn ghost" id="chatMore">ดูข้อความก่อนหน้า</button></div>` : '';
+  let day = '', prev = null;
+  for (const m of chat.msgs) {
+    const d = chatDay(m.ts);
+    if (d !== day) { html += `<div class="chat-day"><span>${d}</span></div>`; day = d; prev = null; }
+    const mine = m.sender === state.me.id;
+    const cont = prev && prev.sender === m.sender && m.ts - prev.ts < 300;
+    const av = mine ? '' : cont ? '<span class="avatar ghost"></span>'
+      : `<span class="avatar">${m.gone ? '?' : avatarInner({ id: m.sender, avatar: m.avatar, display_name: m.name, username: m.name })}</span>`;
+    html += `<div class="msg ${mine ? 'mine' : ''} ${cont ? 'cont' : ''}">${av}<div class="bubble-wrap">
+      ${!mine && !cont && !dm ? `<b class="who">${esc(m.name)}${m.gone ? ' <i>(ลบบัญชีแล้ว)</i>' : ''}</b>` : ''}
+      <div class="bubble"><span class="text">${linkify(esc(m.body))}</span><time title="${esc(new Date(m.ts * 1000).toLocaleString('th-TH'))}">${hhmm(m.ts)}</time></div></div></div>`;
+    prev = m;
+  }
+  if (!chat.msgs.length) html += `<div class="empty"><div class="big">${icon('chat')}</div><b>เริ่มบทสนทนา</b>พิมพ์ข้อความด้านล่าง แล้วกด Enter</div>`;
+  box.innerHTML = html;
+  if (keepTop) box.scrollTop = box.scrollHeight - oldH + oldTop;
+  else if (nearBottom || keepTop === false) box.scrollTop = box.scrollHeight;
+  $('#chatMore')?.addEventListener('click', loadOlder);
+}
+async function loadOlder() {
+  try {
+    const r = await api(`/api/chat/messages?c=${encodeURIComponent(chat.conv)}&before=${chat.msgs[0].id}`);
+    chat.msgs = [...r.messages, ...chat.msgs]; chat.more = r.more; renderMsgs(true);
+  } catch (e) { fail(e); }
+}
+async function openChat(conv) {
+  await refreshConvs();
+  if (conv && !convInfo(conv)) { toast('ไม่พบห้องแชทนี้ หรือคุณไม่มีสิทธิ์', 'err'); conv = null; }
+  if (!conv && window.innerWidth > 860) conv = convInfo(chat.conv) ? chat.conv : chat.convs[0]?.id;
+  chat.conv = conv || null;
+  $('.chat').classList.toggle('thread', !!conv);
+  renderConvs();
+  if (!conv) { $('#chatHead').innerHTML = ''; $('#chatMsgs').innerHTML = ''; return; }
+  renderHead();
+  chat.msgs = []; chat.more = false;
+  $('#chatMsgs').innerHTML = '<p class="muted chat-loading">กำลังโหลด…</p>';
+  try { const r = await api('/api/chat/messages?c=' + encodeURIComponent(conv)); chat.msgs = r.messages; chat.more = r.more; }
+  catch (e) { fail(e); return; }
+  renderMsgs(false);
+  markRead(conv);
+  if (window.innerWidth > 860) $('#chatText').focus();
+}
+const growChat = () => { const t = $('#chatText'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; };
+$('#chatText').addEventListener('input', growChat);
+$('#chatText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#chatForm').requestSubmit(); }
+});
+$('#chatForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const t = $('#chatText'), body = t.value.trim();
+  if (!body || !chat.conv) return;
+  t.value = ''; growChat();
+  try {
+    const { message } = await api('/api/chat/send', { method: 'POST', json: { c: chat.conv, body } });
+    if (!chat.msgs.some((x) => x.id === message.id)) { chat.msgs.push(message); renderMsgs(false); }
+    const c = chat.convs.find((x) => x.id === chat.conv);
+    if (c) { c.last = message; renderConvs(); } else refreshConvs();
+  } catch (err) { fail(err); t.value = body; growChat(); }
+};
+$('#newChatBtn').onclick = () => {
+  const { m, close } = modal(`<h3>แชทใหม่</h3><p class="desc">เลือกคนที่ต้องการคุยด้วย ข้อความส่วนตัวเห็นเฉพาะคุณสองคน</p>
+    <label class="search people-search">${icon('search')}<input id="pplQ" placeholder="ค้นหาชื่อ" autofocus></label>
+    <div class="people" id="pplList"></div><div class="actions"><button class="btn" data-close>ปิด</button></div>`);
+  const paint = () => {
+    const q = $('#pplQ', m).value.trim().toLowerCase();
+    $('#pplList', m).innerHTML = chat.people.filter((p) => !q || `${p.display_name} ${p.username}`.toLowerCase().includes(q))
+      .map((p) => `<button class="person" data-pid="${p.id}"><span class="avatar">${avatarInner(p)}</span><span><b>${esc(p.display_name)}</b><small>${esc(p.username)} · ${ROLE[p.role]}</small></span>${icon('chat')}</button>`).join('')
+      || '<p class="muted">ไม่พบชื่อนี้</p>';
+    $$('[data-pid]', m).forEach((b) => (b.onclick = () => { close(); location.hash = 'chat/' + dmId(+b.dataset.pid); }));
+  };
+  $('#pplQ', m).oninput = paint;
+  paint();
+};
 
 // ------------------------------------------------------------------ network settings (super admin)
 const IPV4 = '(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}';

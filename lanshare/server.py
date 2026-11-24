@@ -96,6 +96,13 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS audit(
               ts INTEGER NOT NULL, username TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat_messages(
+              id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, sender INTEGER NOT NULL,
+              sender_name TEXT NOT NULL, body TEXT NOT NULL, ts INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS chat_conv ON chat_messages(conv, id);
+            CREATE TABLE IF NOT EXISTS chat_read(
+              user_id INTEGER NOT NULL, conv TEXT NOT NULL, last_id INTEGER NOT NULL,
+              PRIMARY KEY(user_id, conv));
             """
         )
 
@@ -144,9 +151,14 @@ def load_user(con: sqlite3.Connection, user_id: int) -> dict | None:
 
 def public_user(u: dict) -> dict:
     d = {k: u[k] for k in ("id", "username", "display_name", "role", "active", "depts")}
-    f = avatar_file(u["id"])
-    d["avatar"] = int(f.stat().st_mtime) if f.is_file() else 0   # version number for cache busting
+    d["avatar"] = avatar_ver(u["id"])
     return d
+
+
+def avatar_ver(uid: int) -> int:
+    """Picture version for cache busting (file mtime), 0 when there is none."""
+    f = avatar_file(uid)
+    return int(f.stat().st_mtime) if f.is_file() else 0
 
 
 def avatar_file(uid: int) -> Path:
@@ -298,6 +310,91 @@ class Hub:
 
 
 HUB = Hub()
+
+# ---------------------------------------------------------------- chat
+# Conversations: "all" (everyone), "dept:<folder>" (people who can open that folder),
+# "dm:<low id>-<high id>" (two people). Messages live in SQLite on this server only.
+
+CHAT_MAX = 2000
+
+
+class ChatHub:
+    """Pushes new chat messages to the signed-in users allowed to see them."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.subs: dict[queue.Queue, int] = {}       # queue -> user id
+
+    def subscribe(self, uid: int) -> queue.Queue:
+        q: queue.Queue = queue.Queue(maxsize=200)
+        with self.lock:
+            self.subs[q] = uid
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        with self.lock:
+            self.subs.pop(q, None)
+
+    def publish(self, conv: str, payload: dict) -> None:
+        with self.lock:
+            subs = list(self.subs.items())
+        allowed: dict[int, bool] = {}
+        with db() as con:
+            for _, uid in subs:
+                if uid not in allowed:
+                    u = load_user(con, uid)
+                    allowed[uid] = bool(u and u["active"] and chat_access(u, conv))
+        data = json.dumps(payload, ensure_ascii=False)
+        for q, uid in subs:
+            if allowed.get(uid):
+                try:
+                    q.put_nowait(data)
+                except queue.Full:
+                    pass
+
+
+CHAT = ChatHub()
+
+
+def dm_peer(u: dict, conv: str) -> int | None:
+    m = re.fullmatch(r"dm:(\d+)-(\d+)", conv)
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    if a >= b or u["id"] not in (a, b):
+        return None
+    return b if u["id"] == a else a
+
+
+def chat_access(u: dict, conv: str) -> bool:
+    if conv == "all":
+        return True
+    if conv.startswith("dept:"):
+        d = conv[5:]
+        return d in departments() and can_view(u, [d])
+    return dm_peer(u, conv) is not None
+
+
+def dm_conv(a: int, b: int) -> str:
+    return f"dm:{min(a, b)}-{max(a, b)}"
+
+
+def chat_row(r) -> dict:
+    live = r["display_name"] is not None
+    return {"id": r["id"], "conv": r["conv"], "sender": r["sender"], "body": r["body"], "ts": r["ts"],
+            "name": r["display_name"] if live else r["sender_name"], "gone": not live,
+            "avatar": avatar_ver(r["sender"]) if live else 0}
+
+
+CHAT_SELECT = ("SELECT m.id, m.conv, m.sender, m.sender_name, m.body, m.ts, u.display_name FROM chat_messages m "
+               "LEFT JOIN users u ON u.id = m.sender ")
+
+
+def forget_user_chat(con: sqlite3.Connection, uid: int) -> None:
+    """On account deletion: drop their private chats, keep room messages under their old name."""
+    con.execute("DELETE FROM chat_messages WHERE conv LIKE ? OR conv LIKE ?", (f"dm:{uid}-%", f"dm:%-{uid}"))
+    con.execute("DELETE FROM chat_read WHERE user_id=? OR conv LIKE ? OR conv LIKE ?", (uid, f"dm:{uid}-%", f"dm:%-{uid}"))
+    con.execute("UPDATE chat_messages SET sender=0 WHERE sender=?", (uid,))    # ids may be reused later
 
 
 def parent_vpath(parts: list[str]) -> str:
@@ -505,6 +602,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "คุณเป็นผู้ดูแลสูงสุดคนสุดท้าย ต้องตั้งผู้ดูแลสูงสุดคนอื่นก่อนจึงจะลบบัญชีนี้ได้")
         with _db_lock, db() as con:
             con.execute("DELETE FROM users WHERE id=?", (u["id"],))
+            forget_user_chat(con, u["id"])
         avatar_file(u["id"]).unlink(missing_ok=True)
         audit(u, "self-delete", u["username"])
         self.send_json(200, {"ok": True}, {"Set-Cookie": "ls_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
@@ -837,6 +935,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "ลบบัญชีของตัวเองไม่ได้")
             with _db_lock, db() as con:
                 con.execute("DELETE FROM users WHERE id=?", (uid,))
+                forget_user_chat(con, uid)
             avatar_file(uid).unlink(missing_ok=True)       # ids can be reused
             audit(actor, "user-delete", target["username"])
             return self.send_json(200, {"ok": True})
@@ -877,6 +976,106 @@ class Handler(BaseHTTPRequestHandler):
                 con.execute("DELETE FROM sessions WHERE user_id=? AND user_id<>?", (uid, actor["id"]))
         audit(actor, "user-update", target["username"])
         self.send_json(200, {"ok": True})
+
+    # ---- chat
+    def chat_conv(self, u: dict, conv) -> str:
+        conv = str(conv or "")
+        if not chat_access(u, conv):
+            raise ApiError(403, "คุณไม่มีสิทธิ์ในห้องแชทนี้")
+        return conv
+
+    def api_get_chat_convs(self):
+        u = self.require_user()
+        depts = departments()
+        rooms = ["all"] + [f"dept:{d}" for d in depts if can_view(u, [d])]
+        out = []
+        with db() as con:
+            dms = [r["conv"] for r in con.execute(
+                "SELECT conv, MAX(id) AS last FROM chat_messages WHERE conv LIKE ? OR conv LIKE ? GROUP BY conv ORDER BY last DESC",
+                (f"dm:{u['id']}-%", f"dm:%-{u['id']}"))]
+            for c in rooms + [c for c in dms if dm_peer(u, c) is not None]:
+                last = con.execute(CHAT_SELECT + "WHERE m.conv=? ORDER BY m.id DESC LIMIT 1", (c,)).fetchone()
+                seen = con.execute("SELECT last_id FROM chat_read WHERE user_id=? AND conv=?", (u["id"], c)).fetchone()
+                unread = con.execute("SELECT COUNT(*) FROM chat_messages WHERE conv=? AND id>? AND sender<>?",
+                                     (c, seen["last_id"] if seen else 0, u["id"])).fetchone()[0]
+                item = {"id": c, "unread": unread, "last": chat_row(last) if last else None}
+                if c == "all":
+                    item.update(kind="all", title="ทุกคนในองค์กร")
+                elif c.startswith("dept:"):
+                    item.update(kind="dept", title=c[5:])
+                else:
+                    peer = load_user(con, dm_peer(u, c))
+                    item.update(kind="dm", title=peer["display_name"] if peer else "ผู้ใช้", peer=public_user(peer) if peer else None)
+                out.append(item)
+            people = [public_user(load_user(con, r["id"])) for r in
+                      con.execute("SELECT id FROM users WHERE active=1 AND id<>? ORDER BY display_name", (u["id"],))]
+        self.send_json(200, {"convs": out, "people": people})
+
+    def api_get_chat_messages(self):
+        u = self.require_user()
+        q = self.query()
+        conv = self.chat_conv(u, q.get("c"))
+        before = int(q["before"]) if str(q.get("before", "")).isdigit() else 0
+        with db() as con:
+            rows = con.execute(CHAT_SELECT + "WHERE m.conv=? AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 60",
+                               (conv, before, before)).fetchall()
+        self.send_json(200, {"messages": [chat_row(r) for r in reversed(rows)], "more": len(rows) == 60})
+
+    def api_post_chat_send(self):
+        u = self.require_user()
+        b = self.read_json()
+        conv = self.chat_conv(u, b.get("c"))
+        peer = dm_peer(u, conv)
+        if peer is not None:
+            with db() as con:
+                p = load_user(con, peer)
+            if not p or not p["active"]:
+                raise ApiError(400, "ผู้ใช้นี้ไม่ได้ใช้งานแล้ว ส่งข้อความไม่ได้")
+        body = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(b.get("body", "")).replace("\r\n", "\n")).strip()
+        if not body:
+            raise ApiError(400, "พิมพ์ข้อความก่อนส่ง")
+        if len(body) > CHAT_MAX:
+            raise ApiError(400, f"ข้อความยาวเกิน {CHAT_MAX} ตัวอักษร")
+        with _db_lock, db() as con:
+            mid = con.execute("INSERT INTO chat_messages(conv, sender, sender_name, body, ts) VALUES(?,?,?,?,?)",
+                              (conv, u["id"], u["display_name"], body, int(time.time()))).lastrowid
+            con.execute("INSERT INTO chat_read VALUES(?,?,?) ON CONFLICT(user_id, conv) DO UPDATE SET last_id=excluded.last_id",
+                        (u["id"], conv, mid))
+            msg = chat_row(con.execute(CHAT_SELECT + "WHERE m.id=?", (mid,)).fetchone())
+        CHAT.publish(conv, msg)
+        self.send_json(200, {"message": msg})
+
+    def api_post_chat_read(self):
+        u = self.require_user()
+        conv = self.chat_conv(u, self.read_json().get("c"))
+        with _db_lock, db() as con:
+            top = con.execute("SELECT COALESCE(MAX(id), 0) FROM chat_messages WHERE conv=?", (conv,)).fetchone()[0]
+            con.execute("INSERT INTO chat_read VALUES(?,?,?) ON CONFLICT(user_id, conv) DO UPDATE SET last_id=MAX(last_id, excluded.last_id)",
+                        (u["id"], conv, top))
+        self.send_json(200, {"ok": True})
+
+    def api_get_chat_events(self):
+        u = self.require_user()
+        q = CHAT.subscribe(u["id"])
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\nevent: ready\ndata: {}\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    self.wfile.write(f"event: msg\ndata: {q.get(timeout=20)}\n\n".encode())
+                except queue.Empty:
+                    self.wfile.write(b": keep-alive\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            CHAT.unsubscribe(q)
 
     # ---- network settings (super admin; proxied to the helper on the Proxmox host)
     def require_superadmin(self) -> dict:
