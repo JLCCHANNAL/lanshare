@@ -524,3 +524,16 @@ h2 { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
   .msg { max-width: 88%; }
   .chat-input .btn span { display: none; }
 }
+/* network mode picker */
+.net-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.mode-card { display: flex; gap: 14px; align-items: flex-start; text-align: left; padding: 16px 18px; cursor: pointer; position: relative; transition: border-color .15s, box-shadow .15s; }
+.mode-card:hover { border-color: rgb(var(--gold) / .6); }
+.mode-card.on { border-color: rgb(var(--gold)); box-shadow: 0 0 0 3px rgb(var(--gold) / .15), var(--shadow); }
+.mode-card > span:nth-child(2) { display: grid; gap: 3px; flex: 1; }
+.mode-card b { font-weight: 600; font-size: 15.5px; }
+.mode-card b em { font-style: normal; font-size: 11.5px; font-weight: 600; color: #7d5f2c; background: rgb(var(--gold) / .16); padding: 1px 8px; border-radius: 99px; margin-left: 6px; }
+.mode-card small { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.mode-card > i { position: absolute; top: 12px; right: 12px; font-style: normal; }
+.readonly-note.warn { background: rgb(183 121 31 / .12); }
+.readonly-note.warn svg { color: var(--warn); }
+@media (max-width: 760px) { .net-mode { grid-template-columns: 1fr; } }

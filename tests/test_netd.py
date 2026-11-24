@@ -69,6 +69,15 @@ class HelperUnitTests(unittest.TestCase):
         out = netd.rewrite_interfaces(src, "192.168.1.250/24", "192.168.1.1")
         self.assertIn("iface vmbr0 inet static\n\taddress 192.168.1.250/24", out)
 
+    def test_rewrite_to_dhcp_and_back(self):
+        out = netd.rewrite_interfaces_dhcp(INTERFACES)
+        self.assertIn("iface vmbr0 inet dhcp\n\tbridge-ports nic0", out)
+        self.assertNotIn("192.168.100.250", out)
+        self.assertIn("address 10.10.10.1/24", out)          # internal bridge untouched
+        self.assertEqual(netd.read_config(out), {"method": "dhcp"})
+        back = netd.rewrite_interfaces(out, "192.168.1.250/24", "192.168.1.1")
+        self.assertIn("iface vmbr0 inet static\n\taddress 192.168.1.250/24\n\tgateway 192.168.1.1\n\tbridge-ports nic0", back)
+
     def test_rewrite_hosts(self):
         out = netd.rewrite_hosts(HOSTS, "192.168.1.250", "pve")
         self.assertIn("192.168.1.250 pve.localdomain pve", out)
@@ -134,6 +143,27 @@ class HelperAndProxyTests(unittest.TestCase):
         c = self.Client(self.port)
         self.assertEqual(c.login(user)[0], 200)
         return c
+
+    def test_dhcp_mode(self):
+        c = self.as_("boss")
+        self.assertEqual(self.as_("ed").req("POST", "/api/net/dhcp")[0], 403)
+        s, r = c.req("POST", "/api/net/dhcp")
+        self.assertEqual(s, 200, r)
+        for _ in range(50):
+            if "inet dhcp" in netd.INTERFACES.read_text():
+                break
+            threading.Event().wait(0.1)
+        try:
+            self.assertIn("iface vmbr0 inet dhcp", netd.INTERFACES.read_text())
+            for _ in range(30):
+                st = c.req("GET", "/api/net")[1]
+                if not st["applying"]:
+                    break
+                threading.Event().wait(0.1)
+            self.assertTrue(st["dhcp"])
+            self.assertIsNone(st["active"])
+        finally:
+            netd.INTERFACES.write_text(INTERFACES)
 
     def test_only_superadmin(self):
         for u in ("ed", "acc"):

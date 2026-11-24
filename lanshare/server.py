@@ -1104,6 +1104,12 @@ class Handler(BaseHTTPRequestHandler):
         self.require_superadmin()
         self.send_json(200, netd("POST", "/probe"))
 
+    def api_post_net_dhcp(self):
+        u = self.require_superadmin()
+        r = netd("POST", "/dhcp", {})
+        audit(u, "net-dhcp", "automatic")
+        self.send_json(200, {**r, "port": PORT})
+
     def api_post_net_apply(self):
         u = self.require_superadmin()
         r = netd("POST", "/apply", {"id": str(self.read_json().get("id", ""))})

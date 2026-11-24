@@ -48,6 +48,7 @@ MDNS_GROUP = "224.0.0.251"
 
 _lock = threading.RLock()
 _applying: str | None = None
+_notice = ""                      # last automatic-mode problem, shown on the settings page
 _mdns_sock: socket.socket | None = None
 STATE: dict = {}
 
@@ -127,6 +128,15 @@ def rewrite_interfaces(text: str, address: str, gateway: str) -> str:
     indent = next((re.match(r"^\s+", ln).group(0) for ln in body if ln.strip()), "\t")
     body = [ln for ln in body if not (ln.split() and ln.split()[0] in ("address", "gateway", "netmask"))]
     lines[i + 1:j] = [f"{indent}address {address}", f"{indent}gateway {gateway}", *body]
+    return "\n".join(lines) + "\n"
+
+
+def rewrite_interfaces_dhcp(text: str) -> str:
+    """Let the router hand out the address (DHCP) on whatever Wi-Fi/LAN the server is plugged into."""
+    lines = text.splitlines()
+    i, j = _stanza(lines, IFACE)
+    lines[i] = re.sub(r"(\binet\s+)\S+", r"\1dhcp", lines[i], count=1)
+    lines[i + 1:j] = [ln for ln in lines[i + 1:j] if not (ln.split() and ln.split()[0] in ("address", "gateway", "netmask"))]
     return "\n".join(lines) + "\n"
 
 
@@ -216,6 +226,7 @@ def public_state() -> dict:
     return {"name": st["name"], "auto": st["auto"],
             "profiles": [{k: p[k] for k in ("id", "label", "address", "gateway")} for p in st["profiles"]],
             "active": active_id(st, cur), "applying": _applying, "iface": IFACE,
+            "dhcp": cur.get("method") == "dhcp", "notice": _notice,
             "current": {"address": cur.get("address"), "gateway": cur.get("gateway"),
                         "method": cur.get("method"), "ip": live_ip()}}
 
@@ -295,6 +306,78 @@ def apply_profile(p: dict, delay: float = 0.0, wait: bool = False) -> None:
     else:
         threading.Thread(target=work, daemon=True).start()
 
+def sync_hosts() -> bool:
+    """Keep /etc/hosts pointing at the address really in use (DHCP can change it). True if changed."""
+    ip = live_ip()
+    if not ip or DRY:
+        return False
+    try:
+        h = HOSTS.read_text("utf-8")
+        h2 = rewrite_hosts(h, ip, socket.gethostname().split(".")[0])
+        if h2 != h:
+            write_atomic(HOSTS, h2)
+            return True
+    except OSError as e:
+        log(f"hosts: {e}")
+    return False
+
+
+def apply_dhcp(delay: float = 0.0, wait: bool = False, timeout: int = 45) -> None:
+    """Switch to automatic addressing; if no address arrives in time, put the old settings back."""
+    global _applying, _notice
+
+    def work():
+        global _applying, _notice
+        try:
+            time.sleep(delay)
+            with _lock:
+                old = INTERFACES.read_text("utf-8")
+                new = rewrite_interfaces_dhcp(old)
+                if new != old:
+                    INTERFACES.with_name(INTERFACES.name + ".lanshare-bak").write_text(old, "utf-8")
+                    write_atomic(INTERFACES, new)
+                run(["ifreload", "-a"], timeout=120)
+                ip = None
+                for _ in range(timeout if not DRY else 0):
+                    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/\d+.*\bdynamic\b", run(["ip", "-4", "-o", "addr", "show", "dev", IFACE]))
+                    if m:                                  # an address handed out by the router
+                        ip = m.group(1)
+                        break
+                    time.sleep(1)
+                if not ip and not DRY:
+                    write_atomic(INTERFACES, old)
+                    run(["ifreload", "-a"], timeout=120)
+                    _notice = "โหมดอัตโนมัติไม่ได้รับ IP จากเราเตอร์ภายใน 45 วินาที จึงกลับไปใช้ค่าเดิม"
+                    log("dhcp: no lease, restored previous settings")
+                    return
+                _notice = ""
+                sync_hosts()
+            log(f"dhcp: {IFACE} got {ip}")
+            announce()
+        except Exception as e:
+            log(f"dhcp failed: {e!r}")
+        finally:
+            _applying = None
+
+    _applying = "dhcp"
+    if wait:
+        work()
+    else:
+        threading.Thread(target=work, daemon=True).start()
+
+
+def watch_address() -> None:
+    """Follow address changes (DHCP renewals, cable/Wi-Fi moves): fix /etc/hosts, re-announce the name."""
+    last = live_ip()
+    while True:
+        time.sleep(10)
+        ip = live_ip()
+        if ip and ip != last:
+            log(f"address changed {last} -> {ip}")
+            sync_hosts()
+            announce()
+        last = ip or last
+
 # ---------------------------------------------------------------- detection
 
 
@@ -342,6 +425,10 @@ def probe() -> dict[str, bool]:
 
 def auto_select() -> None:
     st = load_state()
+    if current().get("method") == "dhcp":       # automatic mode: the router decides, just keep hosts right
+        time.sleep(15)
+        sync_hosts()
+        return
     if not st["auto"] or not st["profiles"]:
         return
     time.sleep(3)
@@ -518,6 +605,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, update_state(self.body()))
             if method == "POST" and path == "/probe":
                 return self.reply(200, {"reachable": probe()})
+            if method == "POST" and path == "/dhcp":
+                if _applying:
+                    raise NetError("กำลังเปลี่ยนเครือข่ายอยู่ กรุณารอสักครู่", 409)
+                apply_dhcp(delay=1.5)
+                return self.reply(200, {"ok": True, "name": load_state()["name"]})
             if method == "POST" and path == "/apply":
                 if _applying:
                     raise NetError("กำลังเปลี่ยนเครือข่ายอยู่ กรุณารอสักครู่", 409)
@@ -548,6 +640,7 @@ def serve() -> None:
         threading.Thread(target=mdns_loop, daemon=True).start()
     if not DRY:
         threading.Thread(target=auto_select, daemon=True).start()
+        threading.Thread(target=watch_address, daemon=True).start()
     httpd = ThreadingHTTPServer((LISTEN, PORT), Handler)
     log(f"API on {LISTEN}:{PORT} (allowed: {', '.join(sorted(ALLOW)) or 'any'})")
     httpd.serve_forever()
@@ -563,6 +656,11 @@ def main(argv: list[str]) -> int:
         print(f"ชื่อเครื่อง: {st['name']}.local   ตอนนี้: {cur.get('address')} via {cur.get('gateway')}")
         for p in st["profiles"]:
             print(f"  {'*' if p['id'] == act else ' '} {p['label']:<20} {p['address']:<20} gw {p['gateway']}")
+    elif cmd == "dhcp":
+        apply_dhcp(wait=True)
+        ip = live_ip()
+        print(f"โหมดอัตโนมัติ: ได้ IP {ip}  เปิดที่ http://{load_state()['name']}.local:8080" if ip and current().get("method") == "dhcp"
+              else "ไม่ได้รับ IP จากเราเตอร์ กลับไปใช้ค่าเดิมแล้ว")
     elif cmd == "use" and len(argv) > 2:
         try:
             p = find_profile(" ".join(argv[2:]))

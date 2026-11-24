@@ -790,6 +790,15 @@ function renderNet() {
   const ip = st.current.ip || (st.current.address || '').split('/')[0];
   const byName = netUrls(`${st.name}.local`), byIp = netUrls(ip);
   $('#netBody').innerHTML = `
+    <div class="net-mode">
+      <button class="card mode-card ${st.dhcp ? 'on' : ''}" data-mode="dhcp"><span class="ficon net ${st.dhcp ? 'on' : ''}">${icon('wifi')}</span>
+        <span><b>อัตโนมัติ <em>แนะนำ</em></b><small>รับ IP จาก Wi-Fi/LAN ที่ต่ออยู่เอง ย้ายเครื่องไปที่ไหนก็ใช้ได้ทันที เปิดด้วยชื่อ ${esc(st.name)}.local</small></span>
+        ${st.dhcp ? '<i class="badge superadmin">ใช้อยู่</i>' : ''}</button>
+      <button class="card mode-card ${st.dhcp ? '' : 'on'}" data-mode="static"><span class="ficon net ${st.dhcp ? '' : 'on'}">${icon('gear')}</span>
+        <span><b>กำหนด IP เอง</b><small>IP คงที่ตามเครือข่ายที่บันทึกไว้ด้านล่าง เหมาะกับคนที่ต้องจำตัวเลข IP</small></span>
+        ${st.dhcp ? '' : '<i class="badge superadmin">ใช้อยู่</i>'}</button>
+    </div>
+    ${st.notice ? `<p class="readonly-note warn">${icon('alert')}${esc(st.notice)}</p>` : ''}
     <div class="card net-hero">
       <div class="net-now">
         <span class="muted">เปิดหน้าเว็บนี้ได้ที่</span>
@@ -797,7 +806,7 @@ function renderNet() {
         <span class="muted">หรือ <a href="${esc(byIp)}">${esc(byIp)}</a> · ไดรฟ์ Windows <code>\\\\${esc(st.name)}.local</code></span>
       </div>
       <div class="net-side">
-        <label class="switch"><input type="checkbox" id="netAuto" ${st.auto ? 'checked' : ''}><i></i><span><b>เลือกเครือข่ายให้อัตโนมัติ</b><small>ทุกครั้งที่เปิดเครื่อง จะหาเครือข่ายที่บันทึกไว้ซึ่งตรงกับที่อยู่ปัจจุบันให้เอง</small></span></label>
+        <label class="switch" ${st.dhcp ? 'hidden' : ''}><input type="checkbox" id="netAuto" ${st.auto ? 'checked' : ''}><i></i><span><b>สลับเครือข่ายที่บันทึกไว้ให้เอง</b><small>ทุกครั้งที่เปิดเครื่อง จะหาเครือข่ายที่บันทึกไว้ซึ่งตรงกับที่อยู่ปัจจุบันให้เอง</small></span></label>
         <div class="net-btns">
           <button class="btn ghost" id="netNameBtn">${icon('edit')}เปลี่ยนชื่อเครื่อง</button>
           <button class="btn ghost" id="netProbeBtn">${icon('search')}ตรวจหาเครือข่าย</button>
@@ -819,6 +828,22 @@ function renderNet() {
       <div>${icon('search')}<p><b>หาค่า Gateway</b> ใช้คอม Windows ที่ต่อ Wi-Fi วงนั้น เปิด Command Prompt พิมพ์ <code>ipconfig</code> ดูบรรทัด “Default Gateway”</p></div>
       <div>${icon('shield')}<p><b>ถ้าเข้าหน้าเว็บไม่ได้</b> เปิดหน้าจอ VMware ของ Proxmox ล็อกอิน root แล้วพิมพ์ <code>lanshare-net list</code> และ <code>lanshare-net use ชื่อเครือข่าย</code></p></div>
     </div>`;
+  $$('.mode-card').forEach((b) => (b.onclick = async () => {
+    if (b.dataset.mode === 'dhcp') {
+      if (st.dhcp) return;
+      const byName = netUrls(`${st.name}.local`);
+      if (!(await confirmBox({ title: 'เปลี่ยนเป็นโหมดอัตโนมัติ?',
+        desc: `เซิร์ฟเวอร์จะขอ IP จากเราเตอร์ของ Wi-Fi/LAN ที่ต่ออยู่ IP อาจเปลี่ยนจากเดิม หน้านี้จะหลุดสักครู่ แล้วเปิดใหม่ที่ ${byName} (ถ้าไม่ได้รับ IP ภายใน 45 วินาที ระบบจะกลับไปใช้ค่าเดิมเอง)`, ok: 'เปลี่ยนเป็นอัตโนมัติ' }))) return;
+      try { await api('/api/net/dhcp', { method: 'POST' }); } catch (e) { return fail(e); }
+      state.es?.close(); state.es = null;
+      modal(`<h3>กำลังเปลี่ยนเป็นโหมดอัตโนมัติ</h3><p class="desc">รอประมาณ 20 วินาที แล้วเปิดหน้าเว็บที่</p>
+        <p class="net-new"><a class="net-url" href="${esc(byName)}">${esc(byName)}</a><span class="muted">ดู IP ใหม่ได้ที่หน้านี้ หรือที่หน้าจอ VMware ของ Proxmox</span></p>
+        <div class="actions"><button class="btn primary" data-close>ตกลง</button></div>`);
+    } else if (st.dhcp) {
+      if (st.profiles.length) toast('เลือกเครือข่ายในตารางด้านล่าง แล้วกด “ใช้ตอนนี้”', 'info');
+      else netForm(null);
+    }
+  }));
   $('#netAuto').onchange = async (e) => {
     try { await saveNet({ auto: e.target.checked }); toast(e.target.checked ? 'เปิดการเลือกเครือข่ายอัตโนมัติแล้ว' : 'ปิดการเลือกเครือข่ายอัตโนมัติแล้ว', 'ok'); } catch (err) { fail(err); e.target.checked = !e.target.checked; }
   };
