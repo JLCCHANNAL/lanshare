@@ -113,7 +113,24 @@ def load_user(con: sqlite3.Connection, user_id: int) -> dict | None:
 
 
 def public_user(u: dict) -> dict:
-    return {k: u[k] for k in ("id", "username", "display_name", "role", "active", "depts")}
+    d = {k: u[k] for k in ("id", "username", "display_name", "role", "active", "depts")}
+    f = avatar_file(u["id"])
+    d["avatar"] = int(f.stat().st_mtime) if f.is_file() else 0   # version number for cache busting
+    return d
+
+
+def avatar_file(uid: int) -> Path:
+    return DATA / "avatars" / f"{int(uid)}.img"
+
+
+def image_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 # ---------------------------------------------------------------- login throttling
 
@@ -429,6 +446,43 @@ class Handler(BaseHTTPRequestHandler):
         audit(u, "change-password", u["username"])
         self.send_json(200, {"ok": True})
 
+    # ---- profile picture (the browser crops/resizes to 256 px before upload)
+    def api_put_me_avatar(self):
+        u = self.require_user()
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= 1_000_000:
+            raise ApiError(413, "รูปใหญ่เกินไป (ไม่เกิน 1 MB)")
+        data = self.rfile.read(n)
+        if not image_type(data):
+            raise ApiError(400, "รองรับเฉพาะรูป PNG, JPEG หรือ WebP")
+        f = avatar_file(u["id"])
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, f)
+        audit(u, "avatar", u["username"])
+        self.send_json(200, {"user": public_user(u)})
+
+    def api_post_me_avatar_delete(self):
+        u = self.require_user()
+        avatar_file(u["id"]).unlink(missing_ok=True)
+        self.send_json(200, {"user": public_user(u)})
+
+    def api_get_avatar(self):
+        self.require_user()
+        try:
+            f = avatar_file(int(self.query().get("id", "")))
+            data = f.read_bytes()
+        except (ValueError, OSError):
+            raise ApiError(404, "ไม่มีรูปโปรไฟล์")
+        self.send_response(200)
+        self.send_header("Content-Type", image_type(data) or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=604800")
+        self.security_headers()
+        self.end_headers()
+        self.wfile.write(data)
+
     # ---- files
     def api_get_list(self):
         u = self.require_user()
@@ -720,6 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "ลบบัญชีของตัวเองไม่ได้")
             with _db_lock, db() as con:
                 con.execute("DELETE FROM users WHERE id=?", (uid,))
+            avatar_file(uid).unlink(missing_ok=True)       # ids can be reused
             audit(actor, "user-delete", target["username"])
             return self.send_json(200, {"ok": True})
 

@@ -199,6 +199,27 @@ class ApiTests(unittest.TestCase):
             got += r.readline()
         self.assertIn(b"event: change", got)
 
+    def test_profile_picture(self):
+        c = self.as_("ed")
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 200
+        s, r = c.req("PUT", "/api/me/avatar", raw=png, headers={"Content-Type": "image/png"})
+        self.assertEqual(s, 200, r)
+        self.assertGreater(r["user"]["avatar"], 0)
+        uid = r["user"]["id"]
+        self.assertGreater(c.req("GET", "/api/me")[1]["user"]["avatar"], 0)
+        # any signed-in user may see it (shown in the user list); anonymous may not
+        s, body = self.as_("acc").req("GET", f"/api/avatar?id={uid}")
+        self.assertEqual((s, body), (200, png))
+        self.assertEqual(Client(self.port).req("GET", f"/api/avatar?id={uid}")[0], 401)
+        # not an image / too big / no CSRF header
+        self.assertEqual(c.req("PUT", "/api/me/avatar", raw=b"<svg onload=alert(1)>")[0], 400)
+        self.assertEqual(c.req("PUT", "/api/me/avatar", raw=png + b"\0" * 1_000_001)[0], 413)
+        self.assertEqual(c.req("PUT", "/api/me/avatar", raw=png, headers={"X-LANShare": "0"})[0], 403)
+        self.assertEqual(c.req("POST", "/api/me/avatar/delete")[0], 200)
+        self.assertEqual(c.req("GET", "/api/me")[1]["user"]["avatar"], 0)
+        self.assertEqual(c.req("GET", f"/api/avatar?id={uid}")[0], 404)
+        self.assertEqual(c.req("GET", "/api/avatar?id=../../etc")[0], 404)
+
 
 if __name__ == "__main__":
     unittest.main()

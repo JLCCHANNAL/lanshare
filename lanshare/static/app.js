@@ -153,12 +153,63 @@ $('#pwBtn').onclick = () => {
   };
 };
 
+// ------------------------------------------------------------------ profile picture
+const initial = (u) => esc((u.display_name || u.username).trim().charAt(0).toUpperCase());
+const avatarInner = (u) => (u.avatar ? `<img src="/api/avatar?id=${u.id}&v=${u.avatar}" alt="">` : initial(u));
+function paintMe() {
+  const u = state.me;
+  $('#meName').textContent = u.display_name;
+  $('#meRole').textContent = ROLE[u.role];
+  $('#avatar').innerHTML = avatarInner(u);
+}
+function squareImage(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const s = Math.min(img.naturalWidth, img.naturalHeight), c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, size, size);
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error('แปลงรูปไม่สำเร็จ'))), 'image/jpeg', 0.88);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('เปิดไฟล์รูปนี้ไม่ได้ ลองใช้ JPG หรือ PNG')); };
+    img.src = url;
+  });
+}
+$('#avatarBtn').onclick = () => {
+  closePops();
+  const { m } = modal(`<h3>รูปโปรไฟล์</h3><p class="desc">เลือกรูป JPG หรือ PNG ระบบจะตัดตรงกลางเป็นสี่เหลี่ยมจัตุรัสให้อัตโนมัติ</p>
+    <div class="avatar-edit"><span class="avatar xl" id="avPrev"></span>
+      <div class="av-side"><b id="avName"></b><small class="muted">แสดงที่มุมขวาบนและในหน้าจัดการผู้ใช้</small>
+        <div class="av-btns"><button class="btn primary" id="avPick">${icon('upload')}เลือกรูป</button><button class="btn ghost danger" id="avDel">${icon('trash')}ลบรูป</button></div></div></div>
+    <input type="file" id="avFile" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden>
+    <div class="actions"><button class="btn" data-close>เสร็จ</button></div>`);
+  const paint = () => { $('#avPrev', m).innerHTML = avatarInner(state.me); $('#avName', m).textContent = state.me.display_name; $('#avDel', m).hidden = !state.me.avatar; paintMe(); };
+  paint();
+  $('#avPick', m).onclick = () => $('#avFile', m).click();
+  $('#avFile', m).onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) return toast('ไฟล์รูปใหญ่เกิน 20 MB', 'err');
+    try {
+      const blob = await squareImage(f);
+      const r = await api('/api/me/avatar', { method: 'PUT', body: blob, headers: { 'Content-Type': 'image/jpeg' } });
+      state.me = r.user; paint(); toast('เปลี่ยนรูปโปรไฟล์แล้ว', 'ok');
+      if (state.view === 'users') loadUsers();
+    } catch (err) { fail(err); }
+  };
+  $('#avDel', m).onclick = async () => {
+    try { state.me = (await api('/api/me/avatar/delete', { method: 'POST' })).user; paint(); toast('ลบรูปโปรไฟล์แล้ว', 'ok'); if (state.view === 'users') loadUsers(); } catch (err) { fail(err); }
+  };
+};
+
 async function start(user) {
   state.me = user;
   $('#login').hidden = true; $('#app').hidden = false;
-  $('#meName').textContent = user.display_name;
-  $('#meRole').textContent = ROLE[user.role];
-  $('#avatar').textContent = (user.display_name || user.username).trim().charAt(0).toUpperCase();
+  paintMe();
   $('#adminNav').hidden = user.role === 'user';
   $('#netNav').hidden = user.role !== 'superadmin';
   await loadDepts();
@@ -436,7 +487,7 @@ async function loadUsers() {
       users.map((u) => {
         const canEdit = me.role === 'superadmin' || u.role === 'user';
         const depts = u.role === 'user' ? (u.depts.length ? u.depts.map((d) => `<span class="chip">${esc(d)}</span>`).join('') : '<span class="muted">ยังไม่มี</span>') : '<span class="muted">ทุกโฟลเดอร์</span>';
-        return `<tr><td><div class="who"><span class="avatar">${esc((u.display_name || u.username).charAt(0).toUpperCase())}</span><div><b>${esc(u.display_name)}</b><small>${esc(u.username)}</small></div></div></td>
+        return `<tr><td><div class="who"><span class="avatar">${avatarInner(u)}</span><div><b>${esc(u.display_name)}</b><small>${esc(u.username)}</small></div></div></td>
           <td><span class="badge ${u.role}">${ROLE[u.role]}</span></td><td><div class="chips">${depts}</div></td>
           <td>${u.active ? '<span class="badge user">ใช้งาน</span>' : '<span class="badge off">ปิดใช้งาน</span>'}</td>
           <td class="actions">${canEdit ? `<button class="btn ghost" data-edit="${u.id}">${icon('edit')}แก้ไข</button>` : ''}
