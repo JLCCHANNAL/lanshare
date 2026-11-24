@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th" data-mode="auto" data-accent="blue">
+<html lang="th" data-mode="auto" data-accent="navy">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -22,7 +22,9 @@
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8c0-.4.4-.8.8-.8h3.4c.4 0 .8.4.8.8V7m-8 0 .9 12a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L18 7m-8 4v6m4-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-users" viewBox="0 0 24 24"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm-6 9c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.4c1.8.9 3 2.9 3 5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
     <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.6 16a5 5 0 0 1 6.8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="19.2" r="1.3" fill="currentColor"/></symbol>
-<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+<symbol id="i-bin" viewBox="0 0 24 24"><path d="M3.5 6.5h17M9 6.5V4.8c0-.7.6-1.3 1.3-1.3h3.4c.7 0 1.3.6 1.3 1.3v1.7M5.5 6.5l1 12.6c.1 1 .9 1.9 2 1.9h7c1.1 0 1.9-.9 2-1.9l1-12.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 10.5v6.5M14 10.5v6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+<symbol id="i-gear"viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.4.9a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5a7.5 7.5 0 0 0-2.6 1.5l-2.4-.9-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.4-.9a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4.9 2-3.4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+<symbol id="i-plus"viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
 <symbol id="i-recycle"viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4.5h4.5M12 8v4l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
@@ -47,14 +49,27 @@
 
 <!-- ============ login ============ -->
 <section id="login" class="login" hidden>
+  <aside class="login-brand">
+    <span class="mono xl" data-mono></span>
+    <div class="login-title">
+      <p class="eyebrow org-tag">{{ORG_TAGLINE}}</p>
+      <h1 class="wordmark app-name">{{APP_NAME}}</h1>
+      <i class="rule"></i>
+    </div>
+    <ul class="login-points">
+      <li><svg><use href="#i-shield"/></svg>ไฟล์อยู่บนเซิร์ฟเวอร์ขององค์กรเท่านั้น</li>
+      <li><svg><use href="#i-wifi"/></svg>ใช้งานในเครือข่ายออฟฟิศ ไม่ต้องใช้อินเทอร์เน็ต</li>
+      <li><svg><use href="#i-users"/></svg>สิทธิ์แยกตามฝ่าย ทุกการเปลี่ยนแปลงมีบันทึก</li>
+    </ul>
+    <p class="login-foot">Private file server</p>
+  </aside>
   <form class="login-card" id="loginForm" autocomplete="on">
-    <div class="brand-mark"><svg><use href="#i-folder"/></svg></div>
-    <h1 class="app-name">{{APP_NAME}}</h1>
-    <p class="muted">เข้าสู่ระบบด้วยบัญชีที่ได้รับจากผู้ดูแล</p>
+    <h2>เข้าสู่ระบบ</h2>
+    <p class="muted">ใช้บัญชีที่ได้รับจากผู้ดูแลระบบ</p>
     <label class="field"><span>ชื่อผู้ใช้</span><input id="lgUser" name="username" autocomplete="username" required autofocus></label>
     <label class="field"><span>รหัสผ่าน</span><input id="lgPass" name="password" type="password" autocomplete="current-password" required></label>
     <button class="btn primary block" type="submit">เข้าสู่ระบบ</button>
-    <p class="hint muted">ใช้ได้เฉพาะในเครือข่ายของออฟฟิศ · ไม่ต้องใช้อินเทอร์เน็ต</p>
+    <p class="hint muted">ลืมรหัสผ่าน? ติดต่อผู้ดูแลระบบเพื่อตั้งรหัสใหม่</p>
   </form>
 </section>
 
@@ -62,7 +77,7 @@
 <div id="app" class="app" hidden>
   <header class="topbar">
     <button class="icon-btn only-mobile" id="navToggle" aria-label="เมนู"><svg><use href="#i-menu"/></svg></button>
-    <div class="brand"><span class="brand-dot"><svg><use href="#i-folder"/></svg></span><span class="app-name">{{APP_NAME}}</span></div>
+    <div class="brand"><span class="mono" data-mono></span><span class="brand-text"><b class="wordmark app-name">{{APP_NAME}}</b><small class="org-tag">{{ORG_TAGLINE}}</small></span></div>
     <label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="ค้นหาในโฟลเดอร์นี้" autocomplete="off"></label>
     <div class="top-actions">
       <span class="live" id="live" title="อัปเดตอัตโนมัติ"><i></i><b>เรียลไทม์</b></span>
@@ -77,9 +92,10 @@
           </div>
           <p class="pop-title">สีธีม</p>
           <div class="swatches" id="swatches">
-            <button data-accent="blue" title="ฟ้า"></button><button data-accent="violet" title="ม่วง"></button>
-            <button data-accent="teal" title="เขียวมิ้นต์"></button><button data-accent="green" title="เขียว"></button>
-            <button data-accent="orange" title="ส้ม"></button><button data-accent="rose" title="ชมพู"></button>
+            <button data-accent="navy" title="น้ำเงินเข้ม"></button><button data-accent="gold" title="ทอง"></button>
+            <button data-accent="graphite" title="กราไฟต์"></button><button data-accent="blue" title="ฟ้า"></button>
+            <button data-accent="violet" title="ม่วง"></button><button data-accent="teal" title="เขียวมิ้นต์"></button>
+            <button data-accent="rose" title="ชมพู"></button>
           </div>
         </div>
       </div>
@@ -89,6 +105,8 @@
           <button id="avatarBtn"><svg><use href="#i-image"/></svg>รูปโปรไฟล์</button>
           <button id="pwBtn"><svg><use href="#i-key"/></svg>เปลี่ยนรหัสผ่าน</button>
           <button id="logoutBtn"><svg><use href="#i-logout"/></svg>ออกจากระบบ</button>
+          <hr>
+          <button id="delMeBtn" class="danger"><svg><use href="#i-trash"/></svg>ลบบัญชีของฉัน</button>
         </div>
       </div>
     </div>
@@ -102,8 +120,8 @@
       <div id="adminNav" hidden>
         <p class="nav-label">ผู้ดูแล</p>
         <button class="nav-item" data-view="users"><svg><use href="#i-users"/></svg>จัดการผู้ใช้</button>
-        <button class="nav-item" data-view="recycle"><svg><use href="#i-recycle"/></svg>ถังขยะ</button>
-        <button class="nav-item" data-view="network" id="netNav" hidden><svg><use href="#i-wifi"/></svg>ตั้งค่าเครือข่าย</button>
+        <button class="nav-item" data-view="recycle"><svg><use href="#i-bin"/></svg>ถังขยะ</button>
+        <button class="nav-item" data-view="network" id="netNav" hidden><svg><use href="#i-gear"/></svg>ตั้งค่าระบบ</button>
       </div>
     </nav>
     <div class="side-foot muted"><svg><use href="#i-shield"/></svg>ใช้ภายในออฟฟิศเท่านั้น</div>
@@ -149,10 +167,18 @@
 
     <!-- network view (super admin) -->
     <section id="viewNetwork" hidden>
-      <div class="toolbar">
-        <h2>ตั้งค่าเครือข่าย</h2>
-        <button class="btn primary" id="addNetBtn" hidden><svg><use href="#i-plus"/></svg><span>เพิ่มเครือข่าย</span></button>
-      </div>
+      <div class="toolbar"><h2>ตั้งค่าระบบ</h2></div>
+      <h3 class="sec-title">องค์กร</h3>
+      <form class="card org-card" id="orgForm">
+        <span class="mono xl" data-mono></span>
+        <div class="org-fields">
+          <label class="field"><span>ชื่อองค์กร</span><input name="orgname" maxlength="60" required placeholder="เช่น JLC Industry"></label>
+          <label class="field"><span>คำอธิบายใต้ชื่อ</span><input name="tagline" maxlength="80" placeholder="เช่น ระบบแชร์ไฟล์ภายในองค์กร"></label>
+        </div>
+        <div class="org-save"><button class="btn primary">บันทึก</button><small class="muted">แสดงที่หน้าเข้าสู่ระบบ แถบด้านบน และชื่อแท็บ</small></div>
+      </form>
+      <div class="sec-head"><h3 class="sec-title">เครือข่าย</h3>
+        <button class="btn primary" id="addNetBtn" hidden><svg><use href="#i-plus"/></svg><span>เพิ่มเครือข่าย</span></button></div>
       <div id="netBody"></div>
     </section>
   </main>

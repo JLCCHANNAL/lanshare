@@ -13,6 +13,7 @@ import argparse
 import getpass
 import hashlib
 import hmac
+import html
 import json
 import mimetypes
 import os
@@ -94,8 +95,37 @@ def init_db() -> None:
               expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS audit(
               ts INTEGER NOT NULL, username TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """
         )
+
+
+DEFAULT_TAGLINE = "ระบบแชร์ไฟล์ภายในองค์กร"
+
+
+def get_setting(key: str, default: str) -> str:
+    try:
+        with db() as con:
+            row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    except sqlite3.OperationalError:          # table not created yet
+        return default
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with _db_lock, db() as con:
+        con.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def org() -> dict:
+    return {"name": get_setting("org_name", APP_NAME), "tagline": get_setting("org_tagline", DEFAULT_TAGLINE)}
+
+
+def clean_text(v, field: str, lo: int, hi: int) -> str:
+    s = re.sub(r"\s+", " ", str(v or "")).strip()
+    if not lo <= len(s) <= hi or re.search(r"[\x00-\x1f<>]", s):
+        raise ApiError(400, f"{field}ต้องยาว {lo}–{hi} ตัวอักษร และห้ามมีเครื่องหมาย < >")
+    return s
 
 
 def audit(user: dict, action: str, detail: str) -> None:
@@ -388,7 +418,9 @@ class Handler(BaseHTTPRequestHandler):
             name = "index.html"
         data = (STATIC / name).read_bytes()
         if name == "index.html":
-            data = data.replace(b"{{APP_NAME}}", APP_NAME.encode())
+            o = org()
+            data = (data.replace(b"{{APP_NAME}}", html.escape(o["name"]).encode())
+                        .replace(b"{{ORG_TAGLINE}}", html.escape(o["tagline"]).encode()))
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
             ctype += "; charset=utf-8"
@@ -429,7 +461,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True}, {"Set-Cookie": "ls_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
 
     def api_get_me(self):
-        self.send_json(200, {"user": public_user(self.require_user()), "app": APP_NAME})
+        o = org()
+        self.send_json(200, {"user": public_user(self.require_user()), "app": o["name"], "tagline": o["tagline"]})
+
+    def api_post_settings_org(self):
+        u = self.require_superadmin()
+        b = self.read_json()
+        name = clean_text(b.get("name"), "ชื่อองค์กร", 1, 60)
+        tagline = clean_text(b.get("tagline", DEFAULT_TAGLINE), "คำอธิบาย", 0, 80)
+        set_setting("org_name", name)
+        set_setting("org_tagline", tagline)
+        audit(u, "org-settings", name)
+        self.send_json(200, org())
 
     def api_post_me_password(self):
         u = self.require_user()
@@ -445,6 +488,26 @@ class Handler(BaseHTTPRequestHandler):
             con.execute("UPDATE users SET pw_hash=? WHERE id=?", (hash_password(new), u["id"]))
         audit(u, "change-password", u["username"])
         self.send_json(200, {"ok": True})
+
+    def api_post_me_delete(self):
+        """A user deletes their own account after re-entering the password."""
+        u = self.require_user()
+        key = f"{self.client_address[0]}|{u['username']}"
+        if throttled(key):
+            raise ApiError(429, "ใส่รหัสผิดหลายครั้ง กรุณารอ 5 นาทีแล้วลองใหม่")
+        with db() as con:
+            row = con.execute("SELECT pw_hash FROM users WHERE id=?", (u["id"],)).fetchone()
+            supers = con.execute("SELECT COUNT(*) FROM users WHERE role='superadmin' AND active=1").fetchone()[0]
+        if not verify_password(str(self.read_json().get("password", "")), row["pw_hash"]):
+            record_fail(key)
+            raise ApiError(400, "รหัสผ่านไม่ถูกต้อง")
+        if u["role"] == "superadmin" and supers <= 1:
+            raise ApiError(400, "คุณเป็นผู้ดูแลสูงสุดคนสุดท้าย ต้องตั้งผู้ดูแลสูงสุดคนอื่นก่อนจึงจะลบบัญชีนี้ได้")
+        with _db_lock, db() as con:
+            con.execute("DELETE FROM users WHERE id=?", (u["id"],))
+        avatar_file(u["id"]).unlink(missing_ok=True)
+        audit(u, "self-delete", u["username"])
+        self.send_json(200, {"ok": True}, {"Set-Cookie": "ls_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
 
     # ---- profile picture (the browser crops/resizes to 256 px before upload)
     def api_put_me_avatar(self):
@@ -912,9 +975,21 @@ def main(argv=None) -> None:
         p.add_argument("username")
         p.add_argument("--dept", action="append", default=[], help="department folder (repeatable)")
         p.set_defaults(role=role)
+    p = sub.add_parser("set-name", help="set the organisation name shown on every page")
+    p.add_argument("name")
+    p.add_argument("--tagline", help="short line under the name")
     a = ap.parse_args(argv)
     if a.cmd == "serve":
         serve()
+    elif a.cmd == "set-name":
+        init_db()
+        try:
+            set_setting("org_name", clean_text(a.name, "ชื่อองค์กร", 1, 60))
+            if a.tagline is not None:
+                set_setting("org_tagline", clean_text(a.tagline, "คำอธิบาย", 0, 80))
+        except ApiError as e:
+            sys.exit(e.message)
+        print(f"ตั้งชื่อองค์กรเป็น “{org()['name']}” แล้ว")
     else:
         if not USER_RE.match(a.username):
             sys.exit("ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 . _ -")

@@ -6,5 +6,5 @@ try {
   const mode = q.get('mode') || p.mode;
   const accent = q.get('accent') || p.accent;
   if (['light', 'dark', 'auto'].includes(mode)) document.documentElement.dataset.mode = mode;
-  if (['blue', 'violet', 'teal', 'green', 'orange', 'rose'].includes(accent)) document.documentElement.dataset.accent = accent;
+  if (['navy', 'gold', 'graphite', 'blue', 'violet', 'teal', 'green', 'orange', 'rose'].includes(accent)) document.documentElement.dataset.accent = accent;
 } catch (e) { /* storage blocked: keep defaults */ }

@@ -29,6 +29,15 @@ chgrp lanshare "$SHARE_DIR" && chmod 2775 "$SHARE_DIR"
 
 install -m 644 "$SRC/deploy/lanshare.service" /etc/systemd/system/lanshare.service
 [ -f /etc/default/lanshare ] || install -m 640 "$SRC/deploy/lanshare.env" /etc/default/lanshare
+# organisation name shown on every page (asked once; change later in the web UI → ตั้งค่าระบบ)
+# non-interactive: LANSHARE_ORG="JLC Industry" bash deploy/install.sh
+if [ -z "${LANSHARE_ORG:-}" ] && [ -t 0 ] && [ ! -s "$DATA_DIR/lanshare.db" ]; then
+  read -rp "ชื่อองค์กร (เช่น JLC Industry): " LANSHARE_ORG || true
+fi
+if [ -n "${LANSHARE_ORG:-}" ]; then
+  (cd "$APP_DIR" && runuser -u lanshare -- env $(grep -v '^#' /etc/default/lanshare | xargs) \
+     python3 -m lanshare.server set-name "$LANSHARE_ORG")
+fi
 systemctl daemon-reload
 systemctl enable --now lanshare
 systemctl restart lanshare

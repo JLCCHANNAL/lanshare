@@ -153,6 +153,44 @@ $('#pwBtn').onclick = () => {
   };
 };
 
+$('#delMeBtn').onclick = () => {
+  closePops();
+  const me = state.me;
+  const { m, close } = modal(`<form><h3>ลบบัญชีของฉัน</h3>
+    <p class="desc">บัญชี <b>${esc(me.username)}</b> จะถูกลบถาวรและออกจากระบบทันที เข้าสู่ระบบด้วยบัญชีนี้ไม่ได้อีก ไฟล์ที่คุณอัปโหลดไว้ในโฟลเดอร์ของฝ่ายยังอยู่ครบ</p>
+    <label class="field"><span>ยืนยันด้วยรหัสผ่านของคุณ</span><input name="pw" type="password" autocomplete="current-password" required autofocus></label>
+    <div class="actions"><button type="button" class="btn" data-close>ยกเลิก</button><button class="btn danger solid">ลบบัญชีถาวร</button></div></form>`);
+  $('form', m).onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/me/delete', { method: 'POST', json: { password: e.target.pw.value } });
+      close(); location.hash = ''; showLogin(); toast('ลบบัญชีของคุณแล้ว', 'ok');
+    } catch (err) { fail(err); e.target.pw.select(); }
+  };
+};
+
+// ------------------------------------------------------------------ organisation identity (name, tagline, monogram)
+function monogram(name) {
+  const words = name.trim().split(/\s+/).filter((w) => /^[A-Za-z0-9]/.test(w));
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (name.match(/[ก-ฮ]/) || [name.trim()[0] || '•'])[0];   // Thai: first consonant
+}
+function paintOrg(o) {
+  $$('.app-name').forEach((e) => (e.textContent = o.name));
+  $$('.org-tag').forEach((e) => (e.textContent = o.tagline));
+  $$('[data-mono]').forEach((e) => (e.textContent = monogram(o.name)));
+  document.title = o.name;
+  state.org = o;
+}
+paintOrg({ name: $('.app-name').textContent, tagline: $('.org-tag').textContent });
+$('#orgForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try { paintOrg(await api('/api/settings/org', { method: 'POST', json: { name: f.orgname.value, tagline: f.tagline.value } })); toast('บันทึกข้อมูลองค์กรแล้ว', 'ok'); }
+  catch (err) { fail(err); }
+};
+
 // ------------------------------------------------------------------ profile picture
 const initial = (u) => esc((u.display_name || u.username).trim().charAt(0).toUpperCase());
 const avatarInner = (u) => (u.avatar ? `<img src="/api/avatar?id=${u.id}&v=${u.avatar}" alt="">` : initial(u));
@@ -296,7 +334,7 @@ function render() {
     (a.type !== b.type ? (a.type === 'dir' ? -1 : 1) : 0) ||
     (key === 'name' ? a.name.localeCompare(b.name, 'th', { numeric: true }) : (a[key] - b[key])) * dir);
   const arrow = (k) => (state.sort.key === k ? (state.sort.dir > 0 ? '↑' : '↓') : '');
-  const head = `<div class="row head"><span></span><button data-sort="name">ชื่อ ${arrow('name')}</button><button data-sort="size">ขนาด ${arrow('size')}</button><button data-sort="mtime">แก้ไขล่าสุด ${arrow('mtime')}</button><span></span></div>`;
+  const head = `<div class="row head"><span></span><button data-sort="name">ชื่อ ${arrow('name')}</button><button data-sort="size" class="size">ขนาด ${arrow('size')}</button><button data-sort="mtime" class="date">แก้ไขล่าสุด ${arrow('mtime')}</button><span></span></div>`;
   if (!list.length) {
     const msg = q ? ['ไม่พบไฟล์ที่ค้นหา', `ไม่มีชื่อที่มีคำว่า “${q}” ในโฟลเดอร์นี้`]
       : top ? ['ยังไม่มีโฟลเดอร์', state.canWrite ? 'กด “โฟลเดอร์ใหม่” เพื่อสร้างโฟลเดอร์ของฝ่าย' : 'ติดต่อผู้ดูแลเพื่อขอสิทธิ์เข้าโฟลเดอร์ของฝ่าย']
@@ -541,7 +579,7 @@ async function loadRecycle() {
         <td>${esc(it.by)}</td><td class="muted">${fmtDate(it.ts)}</td>
         <td class="actions"><button class="btn ghost" data-restore="${it.id}">${icon('recycle')}กู้คืน</button>
         ${state.me.role === 'superadmin' ? `<button class="icon-btn" data-purge="${it.id}" aria-label="ลบถาวร">${icon('trash')}</button>` : ''}</td></tr>`).join('') + '</tbody>'
-      : `<tbody><tr><td><div class="empty"><div class="big">${icon('recycle')}</div><b>ถังขยะว่าง</b>ไฟล์ที่ถูกลบจะมาอยู่ที่นี่</div></td></tr></tbody>`;
+      : `<tbody><tr><td><div class="empty"><div class="big">${icon('bin')}</div><b>ถังขยะว่าง</b>ไฟล์ที่ถูกลบจะมาอยู่ที่นี่</div></td></tr></tbody>`;
     $$('[data-restore]').forEach((b) => (b.onclick = async () => {
       try { const r = await api('/api/recycle/restore', { method: 'POST', json: { id: b.dataset.restore } }); toast(`กู้คืนไปที่ ${r.path} แล้ว`, 'ok'); loadRecycle(); loadDepts(); } catch (e) { fail(e); }
     }));
@@ -558,6 +596,8 @@ const mask = (n) => [0, 1, 2, 3].map((i) => 256 - 2 ** (8 - Math.max(0, Math.min
 const netUrls = (host) => { const p = state.net.port; return `http://${host}${p == 80 ? '' : ':' + p}`; };
 
 async function loadNetwork() {
+  const of = $('#orgForm');
+  of.orgname.value = state.org.name; of.tagline.value = state.org.tagline;
   try { state.net = await api('/api/net'); } catch (e) { $('#netBody').innerHTML = ''; return fail(e); }
   renderNet();
 }

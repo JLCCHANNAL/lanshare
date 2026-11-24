@@ -199,6 +199,31 @@ class ApiTests(unittest.TestCase):
             got += r.readline()
         self.assertIn(b"event: change", got)
 
+    def test_org_name(self):
+        boss = self.as_("boss")
+        s, r = boss.req("POST", "/api/settings/org", {"name": "  Jlc   Industry ", "tagline": "ระบบแชร์ไฟล์"})
+        self.assertEqual((s, r["name"]), (200, "Jlc Industry"))
+        self.assertEqual(self.as_("acc").req("POST", "/api/settings/org", {"name": "x"})[0], 403)
+        self.assertEqual(self.as_("ed").req("POST", "/api/settings/org", {"name": "x"})[0], 403)
+        self.assertEqual(boss.req("POST", "/api/settings/org", {"name": "<script>"})[0], 400)
+        self.assertEqual(boss.req("POST", "/api/settings/org", {"name": ""})[0], 400)
+        s, page = Client(self.port).req("GET", "/")
+        self.assertIn("Jlc Industry".encode(), page)
+        self.assertEqual(boss.req("GET", "/api/me")[1]["app"], "Jlc Industry")
+
+    def test_delete_own_account(self):
+        server.create_user_cli("leaver", "user", ["HR"])
+        c = self.as_("leaver")
+        self.assertEqual(c.req("POST", "/api/me/delete", {"password": "wrong-password"})[0], 400)
+        self.assertEqual(c.req("GET", "/api/me")[0], 200)           # still there
+        self.assertEqual(c.req("POST", "/api/me/delete", {"password": PW})[0], 200)
+        self.assertEqual(c.req("GET", "/api/me")[0], 401)           # session gone
+        self.assertEqual(Client(self.port).login("leaver")[0], 401)  # account gone
+        # the only super admin cannot remove themself
+        s, r = self.as_("boss").req("POST", "/api/me/delete", {"password": PW})
+        self.assertEqual(s, 400)
+        self.assertIn("คนสุดท้าย", r["error"])
+
     def test_profile_picture(self):
         c = self.as_("ed")
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 200
