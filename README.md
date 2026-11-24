@@ -51,6 +51,23 @@ sudo -u lanshare env $(grep -v '^#' /etc/default/lanshare | xargs) \
 | `LANSHARE_NAME` | `แชร์ไฟล์องค์กร` | ชื่อที่แสดงบนหน้าเว็บ |
 | `LANSHARE_MAX_UPLOAD` | 4 GiB | ขนาดไฟล์สูงสุดต่อไฟล์ |
 
+## ตั้งค่าเครือข่ายจากหน้าเว็บ (Proxmox)
+
+ถ้าเซิร์ฟเวอร์ต้องย้ายไปใช้หลายที่ (เช่น ที่ทำงาน ↔ ที่บ้าน) ให้ติดตั้ง **ตัวช่วยเครือข่าย** บนเครื่อง Proxmox แล้วผู้ดูแลสูงสุดจะได้เมนู **ตั้งค่าเครือข่าย**:
+
+- บันทึกได้หลายเครือข่าย (IP เครื่อง + Gateway) แล้วกด **ใช้ตอนนี้** เพื่อสลับ
+- **เลือกอัตโนมัติ** ตอนเปิดเครื่อง: ตรวจว่าเราเตอร์ของเครือข่ายไหนตอบ (เทียบ MAC ด้วย กรณีหลายที่ใช้ Gateway เลขเดียวกัน)
+- เปิดด้วยชื่อได้ทุกที่: `http://fileserver.local:8080` และไดรฟ์ `\\fileserver.local` (mDNS, เปลี่ยนชื่อได้)
+- กู้คืนจากคอนโซลได้: `lanshare-net list` / `lanshare-net use ที่ทำงาน`
+
+```bash
+# บนเครื่อง Proxmox (root) — 200 = เลขคอนเทนเนอร์ที่รัน LANShare
+wget -qO- https://github.com/JLCCHANNAL/lanshare/archive/refs/heads/main.tar.gz | tar xz
+bash lanshare-main/deploy/netd-install.sh 200
+```
+
+ตัวช่วยรันเป็น root บนเครื่องหลัก แต่รับคำสั่งเฉพาะจาก IP ของคอนเทนเนอร์บนสะพานภายใน (vmbr1) พร้อมรหัสลับ และทำได้แค่เปลี่ยน address/gateway ของ vmbr0 เท่านั้น
+
 ## ทดลองบนเครื่องตัวเอง
 
 ```bash
@@ -63,7 +80,7 @@ python3 -m lanshare.server serve     # แล้วเปิด http://127.0.0.1
 ## ทดสอบ
 
 ```bash
-python3 -m unittest discover -s tests -v     # 19 tests: สิทธิ์, path traversal, อัปโหลด, ถังขยะ, เรียลไทม์
+python3 -m unittest discover -s tests -v     # 27 tests: สิทธิ์, path traversal, อัปโหลด, ถังขยะ, เรียลไทม์, ตั้งค่าเครือข่าย
 ```
 
 ## โครงสร้าง
@@ -71,7 +88,8 @@ python3 -m unittest discover -s tests -v     # 19 tests: สิทธิ์, pat
 ```
 lanshare/server.py        เซิร์ฟเวอร์ HTTP + API + SSE (Python standard library)
 lanshare/static/          หน้าเว็บ: HTML, CSS, JavaScript (ไม่มีไลบรารีภายนอก)
-deploy/                   install.sh, systemd service, ไฟล์ตั้งค่า
+deploy/                   install.sh, netd-install.sh, systemd services, ไฟล์ตั้งค่า
+hostd/netd.py             ตัวช่วยเครือข่ายบนเครื่อง Proxmox (เปลี่ยน IP + ชื่อ .local)
 tests/                    ชุดทดสอบ API แบบ end-to-end
 ```
 
@@ -82,3 +100,4 @@ tests/                    ชุดทดสอบ API แบบ end-to-end
 LANShare is a small, dependency-free (Python standard library only) Thai-language file-sharing web app for office LANs. It runs fully offline, serves department folders from one root, and offers three roles (super admin, editor who can add but not delete users, and department-scoped users), live updates via Server-Sent Events, light/dark mode with six accent themes, auto-dismissing notifications, drag-and-drop uploads with progress, previews, a recycle bin, and an audit log. Security: scrypt password hashing, HttpOnly/SameSite cookies, CSRF header check, path-traversal protection, login throttling and a strict CSP. Install on Debian or a Proxmox LXC with `deploy/install.sh`.
 
 License: MIT
+

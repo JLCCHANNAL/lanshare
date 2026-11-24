@@ -24,7 +24,9 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +40,8 @@ PORT = int(os.environ.get("LANSHARE_PORT", "8080"))
 MAX_UPLOAD = int(os.environ.get("LANSHARE_MAX_UPLOAD", str(4 * 1024**3)))  # bytes per file
 SESSION_HOURS = int(os.environ.get("LANSHARE_SESSION_HOURS", "12"))
 APP_NAME = os.environ.get("LANSHARE_NAME", "แชร์ไฟล์องค์กร")
+NETD_URL = os.environ.get("LANSHARE_NETD_URL", "").rstrip("/")   # optional host network helper
+NETD_TOKEN_FILE = Path(os.environ.get("LANSHARE_NETD_TOKEN_FILE", "/etc/lanshare/netd.token"))
 STATIC = Path(__file__).resolve().parent / "static"
 RECYCLE = ".lanshare-recycle"           # hidden folder inside ROOT
 ROLES = ("superadmin", "editor", "user")
@@ -755,6 +759,66 @@ class Handler(BaseHTTPRequestHandler):
                 con.execute("DELETE FROM sessions WHERE user_id=? AND user_id<>?", (uid, actor["id"]))
         audit(actor, "user-update", target["username"])
         self.send_json(200, {"ok": True})
+
+    # ---- network settings (super admin; proxied to the helper on the Proxmox host)
+    def require_superadmin(self) -> dict:
+        u = self.require_user()
+        if u["role"] != "superadmin":
+            raise ApiError(403, "เฉพาะผู้ดูแลสูงสุดเท่านั้น")
+        return u
+
+    def send_net(self, st: dict) -> None:
+        self.send_json(200, {**st, "available": True, "port": PORT})
+
+    def api_get_net(self):
+        self.require_superadmin()
+        if not NETD_URL:
+            return self.send_json(200, {"available": False, "port": PORT})
+        self.send_net(netd("GET", "/state"))
+
+    def api_post_net_save(self):
+        u = self.require_superadmin()
+        b = self.read_json()
+        st = netd("POST", "/state", {k: b[k] for k in ("name", "auto", "profiles") if k in b})
+        audit(u, "net-save", ", ".join(k for k in ("name", "auto", "profiles") if k in b))
+        self.send_net(st)
+
+    def api_post_net_probe(self):
+        self.require_superadmin()
+        self.send_json(200, netd("POST", "/probe"))
+
+    def api_post_net_apply(self):
+        u = self.require_superadmin()
+        r = netd("POST", "/apply", {"id": str(self.read_json().get("id", ""))})
+        audit(u, "net-apply", f"{r.get('label')} {r.get('ip')}")
+        self.send_json(200, {**r, "port": PORT})
+
+
+def netd(method: str, path: str, body: dict | None = None) -> dict:
+    """Call the network helper on the host (see hostd/netd.py)."""
+    if not NETD_URL:
+        raise ApiError(404, "ยังไม่ได้ติดตั้งตัวช่วยเครือข่ายบนเครื่องหลัก")
+    try:
+        tok = NETD_TOKEN_FILE.read_text().strip()
+    except OSError:
+        raise ApiError(503, "อ่านกุญแจของตัวช่วยเครือข่ายไม่ได้")
+    req = urllib.request.Request(NETD_URL + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+    try:
+        with _netd_opener.open(req, timeout=60) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read() or b"{}").get("error")
+        except ValueError:
+            msg = None
+        raise ApiError(e.code if 400 <= e.code < 500 else 502, msg or "ตัวช่วยเครือข่ายตอบผิดพลาด")
+    except (OSError, ValueError):
+        raise ApiError(503, "ติดต่อตัวช่วยเครือข่ายบนเครื่องหลักไม่ได้")
+
+
+_netd_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # ---------------------------------------------------------------- CLI
 

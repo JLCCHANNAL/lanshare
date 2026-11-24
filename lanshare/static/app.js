@@ -160,6 +160,7 @@ async function start(user) {
   $('#meRole').textContent = ROLE[user.role];
   $('#avatar').textContent = (user.display_name || user.username).trim().charAt(0).toUpperCase();
   $('#adminNav').hidden = user.role === 'user';
+  $('#netNav').hidden = user.role !== 'superadmin';
   await loadDepts();
   route();
 }
@@ -169,6 +170,7 @@ function route() {
   const h = decodeURIComponent(location.hash.slice(1));
   if (h === 'users' && state.me.role !== 'user') return showView('users');
   if (h === 'recycle' && state.me.role !== 'user') return showView('recycle');
+  if (h === 'network' && state.me.role === 'superadmin') return showView('network');
   showView('files', h.startsWith('/') ? h : '/');
 }
 window.addEventListener('hashchange', () => state.me && route());
@@ -179,12 +181,14 @@ function showView(view, path) {
   $('#viewFiles').hidden = view !== 'files';
   $('#viewUsers').hidden = view !== 'users';
   $('#viewRecycle').hidden = view !== 'recycle';
+  $('#viewNetwork').hidden = view !== 'network';
   $('#search').parentElement.hidden = view !== 'files';
   closeNav();
   if (view === 'files') openFolder(path);
   else { state.es?.close(); state.es = null; setLive(false); }
   if (view === 'users') loadUsers();
   if (view === 'recycle') loadRecycle();
+  if (view === 'network') loadNetwork();
   markNav();
 }
 function markNav() {
@@ -495,6 +499,120 @@ async function loadRecycle() {
       try { await api('/api/recycle/purge', { method: 'POST', json: { id: b.dataset.purge } }); toast('ลบถาวรแล้ว', 'ok'); loadRecycle(); } catch (e) { fail(e); }
     }));
   } catch (e) { fail(e); }
+}
+
+// ------------------------------------------------------------------ network settings (super admin)
+const IPV4 = '(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}';
+const mask = (n) => [0, 1, 2, 3].map((i) => 256 - 2 ** (8 - Math.max(0, Math.min(8, n - 8 * i)))).map((v) => (v === 256 ? 0 : v)).join('.');
+const netUrls = (host) => { const p = state.net.port; return `http://${host}${p == 80 ? '' : ':' + p}`; };
+
+async function loadNetwork() {
+  try { state.net = await api('/api/net'); } catch (e) { $('#netBody').innerHTML = ''; return fail(e); }
+  renderNet();
+}
+async function saveNet(patch) { state.net = await api('/api/net/save', { method: 'POST', json: patch }); renderNet(); }
+
+function renderNet() {
+  const st = state.net, seen = state.netSeen || {};
+  $('#addNetBtn').hidden = !st.available;
+  if (!st.available) {
+    $('#netBody').innerHTML = `<div class="card net-off">${icon('info')}<div><b>ยังไม่ได้ติดตั้งตัวช่วยเครือข่ายบนเครื่องหลัก</b>
+      <p class="muted">หน้านี้ใช้เปลี่ยน IP ของเซิร์ฟเวอร์และเปิดชื่อ <code>fileserver.local</code> ต้องติดตั้งบนเครื่อง Proxmox ก่อนด้วยคำสั่ง <code>bash deploy/netd-install.sh</code></p></div></div>`;
+    return;
+  }
+  const ip = st.current.ip || (st.current.address || '').split('/')[0];
+  const byName = netUrls(`${st.name}.local`), byIp = netUrls(ip);
+  $('#netBody').innerHTML = `
+    <div class="card net-hero">
+      <div class="net-now">
+        <span class="muted">เปิดหน้าเว็บนี้ได้ที่</span>
+        <a class="net-url" href="${esc(byName)}">${esc(byName)}</a>
+        <span class="muted">หรือ <a href="${esc(byIp)}">${esc(byIp)}</a> · ไดรฟ์ Windows <code>\\\\${esc(st.name)}.local</code></span>
+      </div>
+      <div class="net-side">
+        <label class="switch"><input type="checkbox" id="netAuto" ${st.auto ? 'checked' : ''}><i></i><span><b>เลือกเครือข่ายให้อัตโนมัติ</b><small>ทุกครั้งที่เปิดเครื่อง จะหาเครือข่ายที่บันทึกไว้ซึ่งตรงกับที่อยู่ปัจจุบันให้เอง</small></span></label>
+        <div class="net-btns">
+          <button class="btn ghost" id="netNameBtn">${icon('edit')}เปลี่ยนชื่อเครื่อง</button>
+          <button class="btn ghost" id="netProbeBtn">${icon('search')}ตรวจหาเครือข่าย</button>
+        </div>
+      </div>
+    </div>
+    <div class="card table-wrap"><table class="table">
+      <thead><tr><th>เครือข่าย</th><th>IP ของเซิร์ฟเวอร์</th><th>Gateway (เราเตอร์)</th><th></th></tr></thead><tbody>
+      ${st.profiles.map((p) => `<tr><td><div class="who"><span class="ficon net ${p.id === st.active ? 'on' : ''}">${icon('wifi')}</span><div><b>${esc(p.label)}</b>
+          <small>${p.id === st.active ? '<span class="badge superadmin">ใช้อยู่ตอนนี้</span>' : ''} ${seen[p.id] ? '<span class="badge ok">พบเครือข่ายนี้</span>' : ''} ${st.applying === p.id ? '<span class="badge editor">กำลังเปลี่ยน…</span>' : ''}</small></div></div></td>
+        <td><code>${esc(p.address.split('/')[0])}</code> <span class="muted">/${esc(p.address.split('/')[1])}</span></td><td><code>${esc(p.gateway)}</code></td>
+        <td class="actions">${p.id !== st.active ? `<button class="btn ghost" data-use="${p.id}">${icon('check')}ใช้ตอนนี้</button>` : ''}
+          <button class="btn ghost" data-nedit="${p.id}">${icon('edit')}แก้ไข</button>
+          <button class="icon-btn" data-ndel="${p.id}" aria-label="ลบเครือข่าย">${icon('trash')}</button></td></tr>`).join('')
+        || `<tr><td colspan="4"><div class="empty"><div class="big">${icon('wifi')}</div><b>ยังไม่มีเครือข่ายที่บันทึกไว้</b>กด “เพิ่มเครือข่าย” เพื่อเริ่ม</div></td></tr>`}
+      </tbody></table></div>
+    <div class="net-tips">
+      <div>${icon('info')}<p><b>ก่อนย้ายเครื่องไปที่อื่น</b> เพิ่มเครือข่ายปลายทางไว้ล่วงหน้า (เช่น “ที่บ้าน”) แล้วเปิด “เลือกเครือข่ายให้อัตโนมัติ” ไว้ ไปเปิดเครื่องที่ไหน เซิร์ฟเวอร์จะเลือกเครือข่ายที่ตรงกันเอง</p></div>
+      <div>${icon('search')}<p><b>หาค่า Gateway</b> ใช้คอม Windows ที่ต่อ Wi-Fi วงนั้น เปิด Command Prompt พิมพ์ <code>ipconfig</code> ดูบรรทัด “Default Gateway”</p></div>
+      <div>${icon('shield')}<p><b>ถ้าเข้าหน้าเว็บไม่ได้</b> เปิดหน้าจอ VMware ของ Proxmox ล็อกอิน root แล้วพิมพ์ <code>lanshare-net list</code> และ <code>lanshare-net use ชื่อเครือข่าย</code></p></div>
+    </div>`;
+  $('#netAuto').onchange = async (e) => {
+    try { await saveNet({ auto: e.target.checked }); toast(e.target.checked ? 'เปิดการเลือกเครือข่ายอัตโนมัติแล้ว' : 'ปิดการเลือกเครือข่ายอัตโนมัติแล้ว', 'ok'); } catch (err) { fail(err); e.target.checked = !e.target.checked; }
+  };
+  $('#netNameBtn').onclick = async () => {
+    const v = await ask({ title: 'ชื่อเครื่องในเครือข่าย', desc: 'ใช้เปิดหน้าเว็บด้วยชื่อแทนตัวเลข ใช้ได้ a-z, 0-9 และขีด (-)', label: 'ชื่อ (ต่อท้ายด้วย .local ให้เอง)', value: st.name, ok: 'บันทึก' });
+    if (!v) return;
+    try { await saveNet({ name: v.toLowerCase().replace(/\.local$/, '') }); toast(`ตั้งชื่อเป็น ${state.net.name}.local แล้ว`, 'ok'); } catch (err) { fail(err); }
+  };
+  $('#netProbeBtn').onclick = async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.lastChild.textContent = 'กำลังตรวจ…';
+    try {
+      state.netSeen = (await api('/api/net/probe', { method: 'POST' })).reachable;
+      const n = Object.values(state.netSeen).filter(Boolean).length;
+      toast(n ? `พบ ${n} เครือข่ายที่ใช้ได้ตอนนี้` : 'ไม่พบเครือข่ายที่บันทึกไว้ในที่นี้', n ? 'ok' : 'warn');
+      renderNet();
+    } catch (err) { fail(err); b.disabled = false; b.lastChild.textContent = 'ตรวจหาเครือข่าย'; }
+  };
+  $$('[data-use]').forEach((b) => (b.onclick = () => useNet(st.profiles.find((p) => p.id === b.dataset.use))));
+  $$('[data-nedit]').forEach((b) => (b.onclick = () => netForm(st.profiles.find((p) => p.id === b.dataset.nedit))));
+  $$('[data-ndel]').forEach((b) => (b.onclick = async () => {
+    const p = st.profiles.find((x) => x.id === b.dataset.ndel);
+    if (!(await confirmBox({ title: `ลบเครือข่าย “${p.label}”?`, desc: p.id === st.active ? 'นี่คือเครือข่ายที่ใช้อยู่ตอนนี้ การลบไม่เปลี่ยน IP ปัจจุบัน แค่ลบออกจากรายการ' : 'ลบออกจากรายการที่บันทึกไว้', ok: 'ลบ', danger: true }))) return;
+    try { await saveNet({ profiles: st.profiles.filter((x) => x.id !== p.id) }); toast('ลบแล้ว', 'ok'); } catch (err) { fail(err); }
+  }));
+}
+$('#addNetBtn').onclick = () => netForm(null);
+
+function netForm(p) {
+  const [addr, pre = '24'] = (p?.address || '').split('/');
+  const prefixes = [...new Set([24, 23, 22, 21, 20, 16, 25, 26, 27, 28, 8, +pre])];
+  const { m, close } = modal(`<form><h3>${p ? 'แก้ไขเครือข่าย' : 'เพิ่มเครือข่าย'}</h3>
+    <p class="desc">ใส่ค่าของวง Wi-Fi/LAN ที่จะนำเซิร์ฟเวอร์ไปใช้ ค่าจะมีผลเมื่อกด “ใช้ตอนนี้” หรือเมื่อเปิดเครื่องในวงนั้น (ถ้าเปิดการเลือกอัตโนมัติ)</p>
+    <label class="field"><span>ชื่อเรียก</span><input name="label" required maxlength="40" value="${esc(p?.label || '')}" placeholder="เช่น ที่บ้าน" autofocus></label>
+    <label class="field"><span>Gateway (IP ของเราเตอร์)</span><input name="gateway" required inputmode="decimal" pattern="${IPV4}" value="${esc(p?.gateway || '')}" placeholder="เช่น 192.168.1.1"><small>ดูจาก ipconfig → Default Gateway บนคอมที่ต่อ Wi-Fi วงนั้น</small></label>
+    <div class="field-row">
+      <label class="field"><span>IP ของเซิร์ฟเวอร์</span><input name="ip" required inputmode="decimal" pattern="${IPV4}" value="${esc(addr || '')}" placeholder="เช่น 192.168.1.250"><small>เลขท้ายที่ไม่ชนกับเครื่องอื่น เช่น .250</small></label>
+      <label class="field"><span>Subnet mask</span><select name="prefix">${prefixes.map((n) => `<option value="${n}" ${String(n) === pre ? 'selected' : ''}>${mask(n)}</option>`).join('')}</select><small>ส่วนใหญ่เป็น 255.255.255.0</small></label>
+    </div>
+    <div class="actions"><button type="button" class="btn" data-close>ยกเลิก</button><button class="btn primary">บันทึก</button></div></form>`);
+  const f = $('form', m);
+  f.gateway.addEventListener('change', () => {
+    if (!f.ip.value && new RegExp(`^${IPV4}$`).test(f.gateway.value.trim())) f.ip.value = f.gateway.value.trim().replace(/\.\d+$/, '.250');
+  });
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const item = { id: p?.id, label: f.label.value.trim(), address: `${f.ip.value.trim()}/${f.prefix.value}`, gateway: f.gateway.value.trim() };
+    const list = p ? state.net.profiles.map((x) => (x.id === p.id ? item : x)) : [...state.net.profiles, item];
+    try { await saveNet({ profiles: list }); close(); toast(p ? 'บันทึกแล้ว' : `เพิ่ม “${item.label}” แล้ว`, 'ok'); } catch (err) { fail(err); }
+  };
+}
+
+async function useNet(p) {
+  const ip = p.address.split('/')[0], byName = netUrls(`${state.net.name}.local`), byIp = netUrls(ip);
+  if (!(await confirmBox({ title: `เปลี่ยนไปใช้ “${p.label}”?`,
+    desc: `เซิร์ฟเวอร์จะเปลี่ยน IP เป็น ${ip} ทันที และหน้านี้จะหลุดการเชื่อมต่อ ถ้าตอนนี้ยังไม่ได้อยู่ในวง “${p.label}” จะเข้าไม่ได้จนกว่าจะย้ายเครื่องไปที่นั่น`, ok: 'เปลี่ยนเลย' }))) return;
+  try { await api('/api/net/apply', { method: 'POST', json: { id: p.id } }); } catch (e) { return fail(e); }
+  state.es?.close(); state.es = null;
+  modal(`<h3>กำลังเปลี่ยนเป็น “${esc(p.label)}”</h3>
+    <p class="desc">รอประมาณ 10 วินาที แล้วเปิดหน้าเว็บที่อยู่ใหม่</p>
+    <p class="net-new"><a class="net-url" href="${esc(byName)}">${esc(byName)}</a><span class="muted">หรือ <a href="${esc(byIp)}">${esc(byIp)}</a></span></p>
+    <div class="actions"><button class="btn primary" data-close>ตกลง</button></div>`);
 }
 
 // ------------------------------------------------------------------ chrome: popovers, nav drawer, look
