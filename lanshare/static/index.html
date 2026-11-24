@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="th" data-mode="auto" data-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>{{APP_NAME}}</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+<script src="look.js"></script>
+</head>
+<body>
+<svg class="sprite" width="0" height="0" aria-hidden="true">
+  <defs>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6c.7 0 1.3.3 1.8.8L12.4 6.5H18.5A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" fill="currentColor"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3h7l5 5v11.5A1.5 1.5 0 0 1 17 21H6.5A1.5 1.5 0 0 1 5 19.5v-15A1.5 1.5 0 0 1 6.5 3z" fill="currentColor" opacity=".18"/><path d="M13.5 3v4a1 1 0 0 0 1 1h4M6.5 3h7l5 5v11.5A1.5 1.5 0 0 1 17 21H6.5A1.5 1.5 0 0 1 5 19.5v-15A1.5 1.5 0 0 1 6.5 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12m0 0-4.5-4.5M12 16l4.5-4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-plus-folder" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6c.7 0 1.3.3 1.8.8L12.4 6.5H18.5A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z M12 10v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m14.5 5.5 4 4M4 20l1-4.5L15.8 4.7a1.5 1.5 0 0 1 2.1 0l1.4 1.4a1.5 1.5 0 0 1 0 2.1L8.5 19z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8c0-.4.4-.8.8-.8h3.4c.4 0 .8.4.8.8V7m-8 0 .9 12a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L18 7m-8 4v6m4-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm-6 9c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.4c1.8.9 3 2.9 3 5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-recycle" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4.5h4.5M12 8v4l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.6 17 3 12 3z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor"/><circle cx="10" cy="7" r="1.3" fill="currentColor"/><circle cx="14.5" cy="7" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14M10 16l-4-4 4-4M6 12h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="14" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m11 11 8.5-8.5M16 6l2.5 2.5M18.5 3.5 21 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5v5.5M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="18.5" r="1.7" fill="currentColor"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h6.5v6.5H4zM13.5 4H20v6.5h-6.5zM4 13.5h6.5V20H4zM13.5 13.5H20V20h-6.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8.5 6H20M8.5 12H20M8.5 18H20M4 6h.5M4 12h.5M4 18h.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.2 7.5 9.5 4.4-1.3 7.5-5.1 7.5-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="m4 17.5 5-5 4 4 2.5-2.5 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- ============ login ============ -->
+<section id="login" class="login" hidden>
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="brand-mark"><svg><use href="#i-folder"/></svg></div>
+    <h1 class="app-name">{{APP_NAME}}</h1>
+    <p class="muted">เข้าสู่ระบบด้วยบัญชีที่ได้รับจากผู้ดูแล</p>
+    <label class="field"><span>ชื่อผู้ใช้</span><input id="lgUser" name="username" autocomplete="username" required autofocus></label>
+    <label class="field"><span>รหัสผ่าน</span><input id="lgPass" name="password" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary block" type="submit">เข้าสู่ระบบ</button>
+    <p class="hint muted">ใช้ได้เฉพาะในเครือข่ายของออฟฟิศ · ไม่ต้องใช้อินเทอร์เน็ต</p>
+  </form>
+</section>
+
+<!-- ============ app ============ -->
+<div id="app" class="app" hidden>
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="navToggle" aria-label="เมนู"><svg><use href="#i-menu"/></svg></button>
+    <div class="brand"><span class="brand-dot"><svg><use href="#i-folder"/></svg></span><span class="app-name">{{APP_NAME}}</span></div>
+    <label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="ค้นหาในโฟลเดอร์นี้" autocomplete="off"></label>
+    <div class="top-actions">
+      <span class="live" id="live" title="อัปเดตอัตโนมัติ"><i></i><b>เรียลไทม์</b></span>
+      <div class="pop-wrap">
+        <button class="icon-btn" id="lookBtn" aria-label="ธีมและโหมด"><svg><use href="#i-palette"/></svg></button>
+        <div class="pop" id="lookPop" hidden>
+          <p class="pop-title">โหมดการแสดงผล</p>
+          <div class="seg" id="modeSeg">
+            <button data-mode="light"><svg><use href="#i-sun"/></svg>กลางวัน</button>
+            <button data-mode="dark"><svg><use href="#i-moon"/></svg>กลางคืน</button>
+            <button data-mode="auto"><svg><use href="#i-auto"/></svg>ตามเครื่อง</button>
+          </div>
+          <p class="pop-title">สีธีม</p>
+          <div class="swatches" id="swatches">
+            <button data-accent="blue" title="ฟ้า"></button><button data-accent="violet" title="ม่วง"></button>
+            <button data-accent="teal" title="เขียวมิ้นต์"></button><button data-accent="green" title="เขียว"></button>
+            <button data-accent="orange" title="ส้ม"></button><button data-accent="rose" title="ชมพู"></button>
+          </div>
+        </div>
+      </div>
+      <div class="pop-wrap">
+        <button class="user-btn" id="userBtn"><span class="avatar" id="avatar"></span><span class="user-meta"><b id="meName"></b><small id="meRole"></small></span></button>
+        <div class="pop pop-menu" id="userPop" hidden>
+          <button id="pwBtn"><svg><use href="#i-key"/></svg>เปลี่ยนรหัสผ่าน</button>
+          <button id="logoutBtn"><svg><use href="#i-logout"/></svg>ออกจากระบบ</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <aside class="sidebar" id="sidebar">
+    <nav>
+      <button class="nav-item" data-view="files" data-path="/"><svg><use href="#i-home"/></svg>หน้าแรก</button>
+      <p class="nav-label">โฟลเดอร์ของฉัน</p>
+      <div id="deptNav"></div>
+      <div id="adminNav" hidden>
+        <p class="nav-label">ผู้ดูแล</p>
+        <button class="nav-item" data-view="users"><svg><use href="#i-users"/></svg>จัดการผู้ใช้</button>
+        <button class="nav-item" data-view="recycle"><svg><use href="#i-recycle"/></svg>ถังขยะ</button>
+      </div>
+    </nav>
+    <div class="side-foot muted"><svg><use href="#i-shield"/></svg>ใช้ภายในออฟฟิศเท่านั้น</div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <main class="main" id="main">
+    <!-- files view -->
+    <section id="viewFiles">
+      <div class="toolbar">
+        <nav class="crumbs" id="crumbs" aria-label="ตำแหน่ง"></nav>
+        <div class="tool-actions">
+          <button class="btn ghost danger" id="bulkDelete" hidden><svg><use href="#i-trash"/></svg><span>ลบที่เลือก</span></button>
+          <button class="btn ghost" id="newFolderBtn"><svg><use href="#i-plus-folder"/></svg><span>โฟลเดอร์ใหม่</span></button>
+          <button class="btn primary" id="uploadBtn"><svg><use href="#i-upload"/></svg><span>อัปโหลด</span></button>
+          <div class="seg small" id="viewSeg">
+            <button data-layout="list" aria-label="แบบรายการ"><svg><use href="#i-list"/></svg></button>
+            <button data-layout="grid" aria-label="แบบไอคอน"><svg><use href="#i-grid"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <p class="readonly-note" id="readonlyNote" hidden><svg><use href="#i-info"/></svg>หน้านี้แสดงโฟลเดอร์ของแต่ละฝ่าย — เปิดโฟลเดอร์ก่อนแล้วจึงอัปโหลดหรือสร้างไฟล์</p>
+      <div class="files" id="files" data-layout="list"></div>
+      <input type="file" id="fileInput" multiple hidden>
+    </section>
+
+    <!-- users view -->
+    <section id="viewUsers" hidden>
+      <div class="toolbar">
+        <h2>จัดการผู้ใช้</h2>
+        <button class="btn primary" id="addUserBtn"><svg><use href="#i-users"/></svg><span>เพิ่มผู้ใช้</span></button>
+      </div>
+      <div class="role-legend" id="roleLegend"></div>
+      <div class="card table-wrap"><table class="table" id="usersTable"></table></div>
+    </section>
+
+    <!-- recycle view -->
+    <section id="viewRecycle" hidden>
+      <div class="toolbar"><h2>ถังขยะ</h2></div>
+      <p class="muted">ไฟล์ที่ลบจากหน้าเว็บจะมาอยู่ที่นี่ กู้คืนกลับที่เดิมได้</p>
+      <div class="card table-wrap"><table class="table" id="recycleTable"></table></div>
+    </section>
+  </main>
+
+  <div class="drop-overlay" id="dropOverlay" hidden><div><svg><use href="#i-upload"/></svg><p>ปล่อยไฟล์เพื่ออัปโหลด</p><small id="dropTarget"></small></div></div>
+  <div class="uploads" id="uploads" hidden><div class="uploads-head"><b>กำลังอัปโหลด</b><button class="icon-btn" id="uploadsClose"><svg><use href="#i-x"/></svg></button></div><div id="uploadList"></div></div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="modal-root" id="modalRoot" hidden></div>
+<div class="ctx" id="ctx" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
