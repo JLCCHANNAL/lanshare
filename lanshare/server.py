@@ -310,10 +310,16 @@ class ApiError(Exception):
         self.status, self.message = status, message
 
 
+def reserved(name: str) -> bool:
+    """Names the system uses itself (recycle bins, temporary uploads). Other dot-files like .gitignore are fine."""
+    n = name.lower()
+    return n in (".", "..", RECYCLE, ".recycle") or n.startswith((".upload-", ".lanshare"))
+
+
 def split_vpath(vpath: str) -> list[str]:
     parts = [p for p in (vpath or "/").replace("\\", "/").split("/") if p not in ("", ".")]
     for p in parts:
-        if p == ".." or p.startswith(".") or not NAME_RE.match(p):
+        if reserved(p) or not NAME_RE.match(p):
             raise ApiError(400, "ชื่อหรือที่อยู่ไฟล์ไม่ถูกต้อง")
     return parts
 
@@ -343,8 +349,8 @@ def can_write(u: dict, parts: list[str]) -> bool:
 
 def check_name(name: str) -> str:
     name = (name or "").strip()
-    if not name or name in (".", "..") or name.startswith(".") or not NAME_RE.match(name):
-        raise ApiError(400, "ชื่อไม่ถูกต้อง: ห้ามว่าง ห้ามขึ้นต้นด้วยจุด และห้ามมีอักขระ / \\ : * ? \" < > |")
+    if not name or reserved(name) or not NAME_RE.match(name):
+        raise ApiError(400, "ชื่อไม่ถูกต้อง: ห้ามว่าง ห้ามใช้ชื่อที่ระบบใช้ และห้ามมีอักขระ / \\ : * ? \" < > |")
     return name
 
 
@@ -353,7 +359,7 @@ def list_dir(p: Path) -> list[dict]:
     try:
         with os.scandir(p) as it:
             for e in it:
-                if e.name.startswith("."):
+                if reserved(e.name):
                     continue
                 try:
                     st = e.stat()
@@ -369,7 +375,7 @@ def list_dir(p: Path) -> list[dict]:
 
 
 def departments() -> list[str]:
-    return [e["name"] for e in list_dir(ROOT) if e["type"] == "dir"]
+    return [e["name"] for e in list_dir(ROOT) if e["type"] == "dir" and not e["name"].startswith(".")]
 
 # ---------------------------------------------------------------- live updates (SSE)
 

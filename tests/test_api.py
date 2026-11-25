@@ -139,7 +139,7 @@ class ApiTests(unittest.TestCase):
 
     def test_bad_names_rejected(self):
         c = self.as_("acc")
-        for n in ("..", ".hidden", "a/b", "a\\b", "x:y", ""):
+        for n in ("..", ".lanshare-recycle", ".recycle", ".upload-x", "a/b", "a\\b", "x:y", ""):   # .gitignore etc. are allowed
             self.assertEqual(c.req("POST", "/api/mkdir", {"path": "/Accounting", "name": n})[0], 400, n)
 
     def test_html_never_served_inline(self):
@@ -388,6 +388,19 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(ed.req("POST", "/api/chat/react", {"id": mid, "emoji": "🍕"})[0], 400)      # only the six
         self.assertEqual(hr.req("POST", "/api/chat/react", {"id": mid, "emoji": "👍"})[0], 404)      # not in that room
         self.assertEqual(ed.req("POST", "/api/chat/react", {"id": 999999, "emoji": "👍"})[0], 404)
+
+    def test_dot_files_upload(self):
+        acc = self.as_("acc")
+        up = lambda path: acc.req("PUT", "/api/upload?path=" + urllib.parse.quote(path) + "&mkdirs=1", raw=b"x")[0]
+        self.assertEqual(up("/Accounting/web app/.gitignore"), 200)
+        self.assertEqual(up("/Accounting/web app/.vscode/launch.json"), 200)
+        names = [e["name"] for e in acc.req("GET", "/api/list?path=" + urllib.parse.quote("/Accounting/web app"))[1]["entries"]]
+        self.assertIn(".gitignore", names)
+        self.assertIn(".vscode", names)
+        # names the system uses itself stay off limits
+        for bad in ("/Accounting/.lanshare-recycle/x.txt", "/Accounting/.recycle/x.txt", "/Accounting/.upload-1234", "/Accounting/../HR/x.txt"):
+            self.assertIn(up(bad), (400, 403), bad)
+        self.assertNotIn(".lanshare-recycle", [e["name"] for e in self.as_("boss").req("GET", "/api/list?path=/")[1]["entries"]])
 
     def test_chat_images(self):
         acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
