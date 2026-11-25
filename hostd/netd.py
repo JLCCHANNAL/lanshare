@@ -366,17 +366,67 @@ def apply_dhcp(delay: float = 0.0, wait: bool = False, timeout: int = 45) -> Non
         threading.Thread(target=work, daemon=True).start()
 
 
+def current_lan() -> tuple[str | None, str | None]:
+    """(address/prefix, gateway) really on the LAN bridge right now."""
+    if DRY:
+        return None, None
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+/\d+)", run(["ip", "-4", "-o", "addr", "show", "dev", IFACE]))
+    g = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", run(["ip", "-4", "route", "show", "default", "dev", IFACE]))
+    return (m.group(1) if m else None), (g.group(1) if g else None)
+
+
 def watch_address() -> None:
-    """Follow address changes (DHCP renewals, cable/Wi-Fi moves): fix /etc/hosts, re-announce the name."""
-    last = live_ip()
+    """Follow address changes and keep the server reachable.
+
+    * new address (DHCP renewal, moved to another Wi-Fi): fix /etc/hosts, re-announce <name>.local
+    * automatic mode and the address vanished (e.g. the lease ran out after the clock jumped or the
+      router was off): ask the router again after 20 s; if that fails too, put the last known address
+      back for now so people can keep working, and keep retrying in the background.
+    """
+    global _notice
+    last, missing_since, retried, patched = live_ip(), None, False, False
     while True:
         time.sleep(10)
-        ip = live_ip()
-        if ip and ip != last:
-            log(f"address changed {last} -> {ip}")
-            sync_hosts()
-            announce()
-        last = ip or last
+        try:
+            addr, gw = current_lan()
+            ip = addr.split("/")[0] if addr else None
+            dhcp = current().get("method") == "dhcp"
+            if ip:
+                if dhcp and gw and not patched:                       # remember a good lease for emergencies
+                    st = load_state()
+                    if st.get("last_dhcp") != {"address": addr, "gateway": gw}:
+                        st["last_dhcp"] = {"address": addr, "gateway": gw}
+                        save_state(st)
+                if ip != last:
+                    log(f"address changed {last} -> {ip}")
+                    sync_hosts()
+                    announce()
+                last, missing_since, retried = ip, None, False
+                if patched and re.search(r"\bdynamic\b", run(["ip", "-4", "-o", "addr", "show", "dev", IFACE])):
+                    patched = False                                    # the router answered again
+                    _notice = ""
+                continue
+            if not dhcp:
+                continue
+            missing_since = missing_since or time.time()
+            gone = time.time() - missing_since
+            if gone >= 20 and not retried:
+                log("dhcp: no address for 20 s - asking the router again")
+                run(["dhclient", "-1", "-timeout", "30", IFACE], timeout=60)
+                retried = True
+            elif gone >= 60 and not patched:
+                fb = load_state().get("last_dhcp")
+                if fb:
+                    log(f"dhcp: still no address - using the last one ({fb['address']}) until the router answers")
+                    run(["ip", "addr", "add", fb["address"], "dev", IFACE])
+                    run(["ip", "route", "replace", "default", "via", fb["gateway"], "dev", IFACE])
+                    _notice = f"เราเตอร์ไม่แจก IP ชั่วคราว ระบบจึงใช้ IP เดิม {fb['address'].split('/')[0]} ไปก่อน และจะลองขอใหม่เรื่อยๆ"
+                    patched = True
+                    sync_hosts()
+                    announce()
+                    subprocess.Popen(["dhclient", "-nw", IFACE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:  # never let the watcher die
+            log(f"watch: {e!r}")
 
 # ---------------------------------------------------------------- detection
 

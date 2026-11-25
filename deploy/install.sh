@@ -21,13 +21,23 @@ for g in $(stat -c %G "$SHARE_DIR"/* 2>/dev/null | sort -u); do
 done
 
 mkdir -p "$APP_DIR" "$DATA_DIR" "$SHARE_DIR"
-rm -rf "$APP_DIR/lanshare"
-cp -r "$SRC/lanshare" "$APP_DIR/"
+# copy the new version beside the old one, flush it to disk, then swap - a power cut mid-update
+# can no longer leave empty program files behind
+rm -rf "$APP_DIR/lanshare.new"
+cp -r "$SRC/lanshare" "$APP_DIR/lanshare.new"
+[ -s "$APP_DIR/lanshare.new/server.py" ] || { echo "copy failed: server.py is empty"; exit 1; }
+sync
+rm -rf "$APP_DIR/lanshare.old"
+[ -d "$APP_DIR/lanshare" ] && mv "$APP_DIR/lanshare" "$APP_DIR/lanshare.old"
+mv "$APP_DIR/lanshare.new" "$APP_DIR/lanshare"
+rm -rf "$APP_DIR/lanshare.old"
 chown -R lanshare:lanshare "$DATA_DIR"
 # top level: only the app (superadmin/editor) may create department folders
 chgrp lanshare "$SHARE_DIR" && chmod 2775 "$SHARE_DIR"
 
-install -m 644 "$SRC/deploy/lanshare.service" /etc/systemd/system/lanshare.service
+install -m 644 "$SRC/deploy/lanshare.service" /etc/systemd/system/lanshare.service.new
+mv /etc/systemd/system/lanshare.service.new /etc/systemd/system/lanshare.service
+sync
 [ -f /etc/default/lanshare ] || install -m 640 "$SRC/deploy/lanshare.env" /etc/default/lanshare
 # organisation name shown on every page (asked once; change later in the web UI → ตั้งค่าระบบ)
 # non-interactive: LANSHARE_ORG="JLC Industry" bash deploy/install.sh
@@ -44,6 +54,7 @@ usermod -aG systemd-journal lanshare 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable --now lanshare
 systemctl restart lanshare
+sync
 sleep 1
 systemctl --no-pager --lines=3 status lanshare || true
 echo

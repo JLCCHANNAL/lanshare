@@ -21,7 +21,7 @@ INTERNAL=$(python3 -c "import ipaddress,sys; print(ipaddress.ip_interface(sys.ar
 
 install -d -m 700 /etc/lanshare-netd
 install -d -m 755 /opt/lanshare-netd
-install -m 755 "$SRC/hostd/netd.py" /opt/lanshare-netd/netd.py
+install -m 755 "$SRC/hostd/netd.py" /opt/lanshare-netd/netd.py.new && mv /opt/lanshare-netd/netd.py.new /opt/lanshare-netd/netd.py && sync
 [ -s /etc/lanshare-netd/token ] || (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > /etc/lanshare-netd/token)
 cat > /etc/default/lanshare-netd <<EOF
 NETD_LISTEN=$LISTEN
@@ -37,6 +37,7 @@ install -m 644 "$SRC/deploy/lanshare-netd.service" /etc/systemd/system/lanshare-
 systemctl daemon-reload
 systemctl enable --now lanshare-netd
 systemctl restart lanshare-netd
+sync
 
 # hand the token to LANShare inside the container and point it at the helper
 pct exec "$CT" -- install -d -m 750 -o root -g lanshare /etc/lanshare
