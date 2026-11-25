@@ -208,11 +208,12 @@
     <section id="viewChatlog" hidden>
       <div class="toolbar"><h2>บันทึกแชท</h2>
         <div class="tool-actions"><button class="btn ghost" id="clRefresh"><svg><use href="#i-recycle"/></svg><span>รีเฟรช</span></button></div></div>
-      <p class="muted act-intro">ใครส่งข้อความถึงใคร เมื่อไหร่ · ห้องกลุ่มแสดงเนื้อหา · ข้อความส่วนตัวแสดงเฉพาะผู้ส่ง ผู้รับ และเวลา (ไม่แสดงเนื้อหา) · เห็นเฉพาะผู้ดูแลสูงสุด</p>
+      <p class="muted act-intro">ทุกข้อความ รวมข้อความส่วนตัว · กดชื่อผู้รับเพื่อดูทั้งบทสนทนา · เห็นเฉพาะผู้ดูแลสูงสุด และทุกครั้งที่เปิดดูข้อความส่วนตัวจะถูกบันทึกในบันทึกกิจกรรม</p>
       <form class="act-filters" id="clFilters">
         <select name="user"><option value="">ทุกคน</option></select>
         <select name="kind"><option value="">ทุกแบบ</option><option value="dm">ข้อความส่วนตัว</option><option value="room">ห้องกลุ่ม</option></select>
       </form>
+      <p class="cl-conv" id="clConv" hidden>บทสนทนา: <b></b> <button class="btn ghost" id="clConvClear" type="button">ดูทั้งหมด</button></p>
       <div class="card table-wrap"><table class="table act-table" id="clTable"></table></div>
       <div class="act-more"><button class="btn ghost" id="clMore" hidden>โหลดเพิ่ม</button></div>
     </section>

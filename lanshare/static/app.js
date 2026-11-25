@@ -298,7 +298,7 @@ function showView(view, path) {
   $('#viewChat').hidden = view !== 'chat';
   $('#viewActivity').hidden = view !== 'activity';
   $('#viewChatlog').hidden = view !== 'chatlog';
-  if (view === 'chatlog') loadChatlog();
+  if (view === 'chatlog') { cl.conv = ''; loadChatlog(); }
   clearInterval(act.timer);
   if (view === 'activity') { loadActivity(); act.timer = setInterval(() => { if (!act.more && !document.hidden) loadActivity(); }, 15000); }
   $('#main').classList.toggle('is-chat', view === 'chat');
@@ -787,7 +787,7 @@ function renderConvs() {
 }
 function renderHead() {
   const c = convInfo(chat.conv);
-  const sub = c.kind === 'dm' ? presenceText(c.peer?.id) : `ออนไลน์ ${roomOnline(c)} คน · ${c.kind === 'all' ? 'ทุกคนในองค์กรเห็นห้องนี้' : `ทุกคนที่เข้าโฟลเดอร์ ${c.title} ได้`}`;
+  const sub = c.kind === 'dm' ? presenceText(c.peer?.id) + ' · ผู้ดูแลระบบตรวจสอบได้' : `ออนไลน์ ${roomOnline(c)} คน · ${c.kind === 'all' ? 'ทุกคนในองค์กรเห็นห้องนี้' : `ทุกคนที่เข้าโฟลเดอร์ ${c.title} ได้`}`;
   $('#chatHead').innerHTML = `<button class="icon-btn chat-back" id="chatBack" aria-label="กลับ">${icon('back')}</button>${convAvatar(c)}
     <div class="chat-title"><b>${esc(c.title)}</b><small>${esc(sub)}</small></div>`;
   $('#chatBack').onclick = () => { location.hash = 'chat'; };
@@ -971,7 +971,7 @@ document.addEventListener('paste', (e) => {
 });
 
 $('#newChatBtn').onclick = () => {
-  const { m, close } = modal(`<h3>แชทใหม่</h3><p class="desc">เลือกคนที่ต้องการคุยด้วย ข้อความส่วนตัวเห็นเฉพาะคุณสองคน</p>
+  const { m, close } = modal(`<h3>แชทใหม่</h3><p class="desc">เลือกคนที่ต้องการคุยด้วย ข้อความส่วนตัวแสดงเฉพาะคุณสองคน (ผู้ดูแลระบบตรวจสอบได้ตามนโยบายองค์กร)</p>
     <label class="search people-search">${icon('search')}<input id="pplQ" placeholder="ค้นหาชื่อ" autofocus></label>
     <div class="people" id="pplList"></div><div class="actions"><button class="btn" data-close>ปิด</button></div>`);
   const paint = () => {
@@ -994,7 +994,7 @@ const ACT = {
   'user-create': ['เพิ่มผู้ใช้', 'users', 'ok'], 'user-update': ['แก้ไขผู้ใช้', 'users', ''], 'user-delete': ['ลบผู้ใช้', 'users', 'bad'],
   'self-delete': ['ลบบัญชีตัวเอง', 'users', 'bad'], 'change-password': ['เปลี่ยนรหัสผ่าน', 'key', ''], avatar: ['เปลี่ยนรูปโปรไฟล์', 'image', ''],
   'org-settings': ['ตั้งค่าองค์กร', 'gear', ''], 'net-save': ['ตั้งค่าเครือข่าย', 'wifi', ''], 'net-apply': ['สลับเครือข่าย', 'wifi', ''],
-  'net-dhcp': ['เครือข่ายอัตโนมัติ', 'wifi', ''],
+  'net-dhcp': ['เครือข่ายอัตโนมัติ', 'wifi', ''], 'view-chatlog': ['เปิดดูบันทึกแชท', 'eye', ''],
 };
 const act = { items: [], more: false, timer: null };
 function uaShort(ua) {
@@ -1040,12 +1040,13 @@ $('#actMore').onclick = () => loadActivity(true);
 $('#actCsv').onclick = () => { location.href = '/api/activity/csv?' + actParams(); };
 
 // ------------------------------------------------------------------ chat log (super admin)
-const cl = { items: [], more: false };
+const cl = { items: [], more: false, conv: '' };
 const CL_KIND = { dm: ['ข้อความส่วนตัว', 'key'], all: ['ห้องทุกคน', 'users'], dept: ['ห้องฝ่าย', 'folder'] };
 async function loadChatlog(more = false) {
   const f = $('#clFilters'), p = new URLSearchParams();
   if (f.user.value) p.set('user', f.user.value);
   if (f.kind.value) p.set('kind', f.kind.value);
+  if (cl.conv) p.set('conv', cl.conv);
   if (more && cl.items.length) p.set('before', cl.items[cl.items.length - 1].id);
   try {
     const r = await api('/api/chatlog?' + p);
@@ -1055,22 +1056,25 @@ async function loadChatlog(more = false) {
     $('#clTable').innerHTML = cl.items.length
       ? `<thead><tr><th>เวลา</th><th>ผู้ส่ง</th><th>ถึง</th><th>เนื้อหา</th></tr></thead><tbody>` + cl.items.map((it) => {
         const [kindLabel, ic] = CL_KIND[it.kind], when = new Date(it.ts * 1000);
-        const what = it.kind === 'dm'
-          ? `<span class="muted">🔒 ข้อความส่วนตัว${it.image ? ' · 📷 รูปภาพ' : ''}${it.chars ? ` · ${it.chars} ตัวอักษร` : ''}</span>`
-          : `${it.image ? '<span class="act-badge">📷 รูปภาพ</span> ' : ''}${esc(it.body || '')}`;
+        const what = `${it.image ? `<button class="cl-img" data-img="${it.id}" title="ดูรูป"><img src="/api/chat/image?id=${it.id}" alt="รูปภาพ" loading="lazy"></button>` : ''}${esc(it.body || '')}`;
         return `<tr><td class="act-when" title="${esc(when.toLocaleString('th-TH'))}"><b>${when.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</b><small>${chatDay(it.ts)}</small></td>
           <td><b>${esc(it.from)}</b></td>
-          <td><span class="act-badge ${it.kind === 'dm' ? 'bad' : ''}">${icon(ic)}${kindLabel}</span><small class="cl-to">${it.kind === 'dm' ? 'ถึง ' : ''}${esc(it.to)}</small></td>
+          <td><span class="act-badge ${it.kind === 'dm' ? 'bad' : ''}">${icon(ic)}${kindLabel}</span><button class="cl-to" data-conv="${esc(it.conv)}" title="ดูเฉพาะบทสนทนานี้">${it.kind === 'dm' ? 'ถึง ' : ''}${esc(it.to)}</button></td>
           <td class="act-detail">${what}</td></tr>`;
       }).join('') + '</tbody>'
       : `<tbody><tr><td><div class="empty"><div class="big">${icon('chat')}</div><b>ยังไม่มีข้อความ</b>ลองเปลี่ยนตัวกรอง</div></td></tr></tbody>`;
     $('#clMore').hidden = !cl.more;
+    $('#clConv').hidden = !cl.conv;
+    $('#clConv b').textContent = cl.conv ? (cl.items[0]?.kind === 'dm' ? `${cl.items[0].from} ↔ ${cl.items[0].to}` : cl.items[0]?.to || cl.conv) : '';
+    $$('#clTable [data-conv]').forEach((b) => (b.onclick = () => { cl.conv = b.dataset.conv; loadChatlog(); }));
+    $$('#clTable [data-img]').forEach((b) => (b.onclick = () => viewChatImage(b.dataset.img)));
   } catch (e) { fail(e); }
 }
 $('#clFilters').oninput = () => loadChatlog();
 $('#clFilters').onsubmit = (e) => e.preventDefault();
 $('#clRefresh').onclick = () => loadChatlog();
 $('#clMore').onclick = () => loadChatlog(true);
+$('#clConvClear').onclick = () => { cl.conv = ''; loadChatlog(); };
 
 // ------------------------------------------------------------------ network settings (super admin)
 const IPV4 = '(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}';

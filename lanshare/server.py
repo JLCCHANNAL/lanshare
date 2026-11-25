@@ -153,7 +153,7 @@ _recent: dict[tuple, float] = {}  # repeated downloads/previews within a minute 
 
 def audit(user: dict, action: str, detail: str, *, ip: str | None = None, source: str = "web", ts: int | None = None) -> None:
     ip = ip if ip is not None else getattr(_req, "ip", "")
-    if action in ("download", "preview", "smb-write"):
+    if action in ("download", "preview", "smb-write", "view-chatlog"):
         key, now = (user["username"], action, detail), time.time()
         if now - _recent.get(key, 0) < 60:
             return
@@ -1299,7 +1299,7 @@ class Handler(BaseHTTPRequestHandler):
         mid = self.query().get("id", "")
         with db() as con:
             row = con.execute("SELECT conv, image FROM chat_messages WHERE id=?", (int(mid) if mid.isdigit() else -1,)).fetchone()
-        if not row or not row["image"] or not chat_access(u, row["conv"]):
+        if not row or not row["image"] or not (chat_access(u, row["conv"]) or u["role"] == "superadmin"):
             raise ApiError(404, "ไม่พบรูปนี้")
         try:
             data = (CHAT_IMAGES / Path(row["image"]).name).read_bytes()
@@ -1398,8 +1398,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ---- chat log (super admin): who wrote to whom and when. Room messages are shown in full (the super
-    # admin can open every room anyway); private messages show only sender, recipient, time and length.
+    # ---- chat log (super admin): who wrote to whom, when and what - private messages included.
+    # Opening it is itself recorded in the activity log, and users see a notice in private chats.
     def api_get_chatlog(self):
         self.require_superadmin()
         q = self.query()
@@ -1411,6 +1411,8 @@ class Handler(BaseHTTPRequestHandler):
         if str(q.get("user", "")).isdigit():
             uid = int(q["user"])
             where.append("(m.sender = ? OR m.conv LIKE ? OR m.conv LIKE ?)"); args += [uid, f"dm:{uid}-%", f"dm:%-{uid}"]
+        if re.fullmatch(r"dm:\d+-\d+|all|dept:.+", str(q.get("conv", ""))):
+            where.append("m.conv = ?"); args.append(q["conv"])
         if str(q.get("before", "")).isdigit():
             where.append("m.id < ?"); args.append(int(q["before"]))
         sql = (CHAT_SELECT + ("WHERE " + " AND ".join(where) + " " if where else "") + "ORDER BY m.id DESC LIMIT 101")
@@ -1428,7 +1430,9 @@ class Handler(BaseHTTPRequestHandler):
                 to = "ทุกคนในองค์กร" if conv == "all" else conv[5:]
             items.append({"id": r["id"], "ts": r["ts"], "from": r["display_name"] or r["sender_name"], "to": to,
                           "kind": "dm" if private else ("all" if conv == "all" else "dept"), "image": bool(r["image"]),
-                          "chars": len(r["body"]), "body": None if private else r["body"]})
+                          "chars": len(r["body"]), "body": r["body"], "conv": conv})
+        if any(i["kind"] == "dm" for i in items):
+            audit(self.require_superadmin(), "view-chatlog", "เปิดดูข้อความส่วนตัว" + (f" ({q['conv']})" if q.get("conv") else ""))
         self.send_json(200, {"items": items, "more": len(rows) > 100, "users": users})
 
     # ---- network settings (super admin; proxied to the helper on the Proxmox host)

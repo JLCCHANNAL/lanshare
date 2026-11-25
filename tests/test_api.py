@@ -363,10 +363,14 @@ class ApiTests(unittest.TestCase):
         s, r = boss.req("GET", f"/api/chatlog?user={a}")
         self.assertEqual(s, 200)
         dm = next(i for i in r["items"] if i["kind"] == "dm")
-        self.assertEqual((dm["to"], dm["body"], dm["chars"]), ("hr", None, len("เรื่องลับ")))   # content hidden
+        self.assertEqual((dm["to"], dm["body"]), ("hr", "เรื่องลับ"))                    # super admin sees private text
         room = next(i for i in r["items"] if i["kind"] == "all")
         self.assertEqual(room["body"], "ประกาศทุกคน")
-        self.assertNotIn("เรื่องลับ", json.dumps(r, ensure_ascii=False))
+        acts = boss.req("GET", "/api/activity?user=boss")[1]["items"]
+        self.assertTrue(any(i["action"] == "view-chatlog" for i in acts))                # viewing is recorded
+        one = boss.req("GET", "/api/chatlog?conv=" + dm["conv"])[1]["items"]
+        self.assertTrue(one and all(i["conv"] == dm["conv"] for i in one))
+        self.assertEqual(hr.req("GET", "/api/chatlog")[0], 403)
         only_dm = boss.req("GET", "/api/chatlog?kind=dm")[1]["items"]
         self.assertTrue(only_dm and all(i["kind"] == "dm" for i in only_dm))
 
