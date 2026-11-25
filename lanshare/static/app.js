@@ -485,6 +485,7 @@ window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth =
 window.addEventListener('drop', (e) => {
   if (!dragHasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('#dropOverlay').hidden = true;
+  if (state.view === 'chat') { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) sendImageDialog(f); else toast('ลากมาได้เฉพาะไฟล์รูปภาพ', 'warn'); return; }
   if (state.view !== 'files') return;
   if (!state.canWrite) return toast(state.path === '/' ? 'เปิดโฟลเดอร์ของฝ่ายก่อน แล้วจึงอัปโหลด' : 'คุณไม่มีสิทธิ์อัปโหลดในโฟลเดอร์นี้', 'warn');
   upload([...e.dataTransfer.files]);
@@ -673,7 +674,7 @@ function onChatMsg(m) {
   if (!c) refreshConvs();                                   // first message of a new private chat
   else { c.last = m; if (!mine && !(viewing && !document.hidden)) c.unread++; }
   if (viewing && !chat.msgs.some((x) => x.id === m.id)) { chat.msgs.push(m); renderMsgs(); if (!mine && !document.hidden) markRead(m.conv); }
-  if (!mine && !viewing) toast(`💬 ${m.name}: ${m.body.length > 90 ? m.body.slice(0, 90) + '…' : m.body}`, 'info');
+  if (!mine && !viewing) toast(`💬 ${m.name}: ${m.image && !m.body ? '📷 ส่งรูปภาพ' : m.body.length > 90 ? m.body.slice(0, 90) + '…' : m.body}`, 'info');
   paintUnread();
   if (state.view === 'chat') renderConvs();
 }
@@ -734,7 +735,7 @@ function renderConvs() {
     const who = !c.last ? '' : c.last.sender === state.me.id ? 'คุณ: ' : c.kind === 'dm' ? '' : c.last.name + ': ';
     return `<button class="conv ${c.id === chat.conv ? 'on' : ''}" data-conv="${esc(c.id)}">${convAvatar(c)}
       <span class="conv-body"><span class="conv-top"><b>${esc(c.title)}</b>${c.last ? `<small>${shortWhen(c.last.ts)}</small>` : ''}</span>
-      <span class="conv-last">${c.last ? esc(who + c.last.body) : '<i>ยังไม่มีข้อความ</i>'}</span></span>
+      <span class="conv-last">${c.last ? esc(who + (c.last.image ? '📷 ' + (c.last.body || 'รูปภาพ') : c.last.body)) : '<i>ยังไม่มีข้อความ</i>'}</span></span>
       ${c.unread && c.id !== chat.conv ? `<span class="pill">${c.unread}</span>` : ''}</button>`;
   };
   const rooms = list.filter((c) => c.kind !== 'dm'), dms = list.filter((c) => c.kind === 'dm');
@@ -753,6 +754,7 @@ function renderHead() {
 function renderMsgs(keepTop) {
   const box = $('#chatMsgs');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  const stick = !keepTop && (nearBottom || keepTop === false);
   const oldH = box.scrollHeight, oldTop = box.scrollTop;
   const dm = convInfo(chat.conv)?.kind === 'dm';
   let html = chat.more ? `<div class="chat-more"><button class="btn ghost" id="chatMore">ดูข้อความก่อนหน้า</button></div>` : '';
@@ -766,7 +768,7 @@ function renderMsgs(keepTop) {
       : `<span class="avatar">${m.gone ? '?' : avatarInner({ id: m.sender, avatar: m.avatar, display_name: m.name, username: m.name })}</span>`;
     html += `<div class="msg ${mine ? 'mine' : ''} ${cont ? 'cont' : ''}">${av}<div class="bubble-wrap">
       ${!mine && !cont && !dm ? `<b class="who">${esc(m.name)}${m.gone ? ' <i>(ลบบัญชีแล้ว)</i>' : ''}</b>` : ''}
-      <div class="bubble"><span class="text">${linkify(esc(m.body))}</span><time title="${esc(new Date(m.ts * 1000).toLocaleString('th-TH'))}">${hhmm(m.ts)}</time></div></div></div>`;
+      <div class="bubble ${m.image ? 'has-img' : ''}">${m.image ? `<button class="chat-img" data-img="${m.id}" aria-label="ดูรูปขนาดเต็ม"><img src="/api/chat/image?id=${m.id}" alt="รูปภาพ" loading="lazy"></button>` : ''}${m.body ? `<span class="text">${linkify(esc(m.body))}</span>` : ''}<time title="${esc(new Date(m.ts * 1000).toLocaleString('th-TH'))}">${hhmm(m.ts)}</time></div></div></div>`;
     prev = m;
   }
   if (!chat.msgs.length) html += `<div class="empty"><div class="big">${icon('chat')}</div><b>เริ่มบทสนทนา</b>พิมพ์ข้อความด้านล่าง แล้วกด Enter</div>`;
@@ -774,6 +776,8 @@ function renderMsgs(keepTop) {
   if (keepTop) box.scrollTop = box.scrollHeight - oldH + oldTop;
   else if (nearBottom || keepTop === false) box.scrollTop = box.scrollHeight;
   $('#chatMore')?.addEventListener('click', loadOlder);
+  $$('#chatMsgs [data-img]').forEach((b) => (b.onclick = () => viewChatImage(b.dataset.img)));
+  $$('#chatMsgs .chat-img img').forEach((im) => im.addEventListener('load', () => { if (stick) box.scrollTop = box.scrollHeight; }, { once: true }));
 }
 async function loadOlder() {
   try {
@@ -798,7 +802,7 @@ async function openChat(conv) {
   markRead(conv);
   if (window.innerWidth > 860) $('#chatText').focus();
 }
-const growChat = () => { const t = $('#chatText'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; };
+const growChat = () => { const t = $('#chatText'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; t.style.overflowY = t.scrollHeight > 160 ? 'auto' : 'hidden'; };
 $('#chatText').addEventListener('input', growChat);
 $('#chatText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#chatForm').requestSubmit(); }
@@ -810,11 +814,69 @@ $('#chatForm').onsubmit = async (e) => {
   t.value = ''; growChat();
   try {
     const { message } = await api('/api/chat/send', { method: 'POST', json: { c: chat.conv, body } });
-    if (!chat.msgs.some((x) => x.id === message.id)) { chat.msgs.push(message); renderMsgs(false); }
-    const c = chat.convs.find((x) => x.id === chat.conv);
-    if (c) { c.last = message; renderConvs(); } else refreshConvs();
+    addSent(message);
   } catch (err) { fail(err); t.value = body; growChat(); }
 };
+function addSent(message) {
+  if (!chat.msgs.some((x) => x.id === message.id)) { chat.msgs.push(message); renderMsgs(false); }
+  const c = chat.convs.find((x) => x.id === chat.conv);
+  if (c) { c.last = message; renderConvs(); } else refreshConvs();
+}
+// ---- pictures in chat: pick a file, paste from the clipboard, or drag one in
+async function shrinkImage(file) {
+  if (file.type === 'image/gif') return file;                              // keep animations as they are
+  const img = await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), i = new Image();
+    i.onload = () => { URL.revokeObjectURL(url); resolve(i); };
+    i.onerror = () => { URL.revokeObjectURL(url); reject(new Error('เปิดรูปนี้ไม่ได้ ลองใช้ JPG หรือ PNG')); };
+    i.src = url;
+  });
+  const scale = Math.min(1, 1920 / Math.max(img.naturalWidth, img.naturalHeight));
+  if (scale === 1 && file.size <= 1.5 * 1024 * 1024 && /^image\/(png|jpeg|webp)$/.test(file.type)) return file;
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const webp = await new Promise((r) => c.toBlob(r, 'image/webp', 0.88));
+  return webp && webp.type === 'image/webp' ? webp : new Promise((r) => c.toBlob(r, 'image/jpeg', 0.88));
+}
+function sendImageDialog(file) {
+  if (!chat.conv) return toast('เลือกห้องแชทก่อน แล้วค่อยส่งรูป', 'warn');
+  if (!file || !file.type.startsWith('image/')) return toast('ส่งได้เฉพาะไฟล์รูปภาพ', 'err');
+  if (file.size > 40 * 1024 * 1024) return toast('ไฟล์รูปใหญ่เกิน 40 MB', 'err');
+  const url = URL.createObjectURL(file);
+  const { m, close } = modal(`<form><h3>ส่งรูปภาพ</h3><p class="desc">ถึง ${esc(convInfo(chat.conv)?.title || '')}</p>
+    <div class="img-preview"><img src="${url}" alt="ตัวอย่างรูป"></div>
+    <label class="field"><span>คำอธิบาย (ไม่ใส่ก็ได้)</span><input name="cap" maxlength="2000" value="${esc($('#chatText').value.trim())}" placeholder="พิมพ์ข้อความประกอบรูป" autofocus></label>
+    <div class="actions"><button type="button" class="btn" data-close>ยกเลิก</button><button class="btn primary">${icon('send')}<span>ส่งรูป</span></button></div></form>`);
+  const f = $('form', m);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('.btn.primary', m), cap = f.cap.value.trim();
+    btn.disabled = true; btn.lastChild.textContent = 'กำลังส่ง…';
+    try {
+      const blob = await shrinkImage(file);
+      const r = await api(`/api/chat/image?c=${encodeURIComponent(chat.conv)}&caption=${encodeURIComponent(cap)}`,
+        { method: 'PUT', body: blob, headers: { 'Content-Type': blob.type || 'application/octet-stream' } });
+      if (cap && cap === $('#chatText').value.trim()) { $('#chatText').value = ''; growChat(); }
+      close(); URL.revokeObjectURL(url);
+      addSent(r.message);
+    } catch (err) { fail(err); btn.disabled = false; btn.lastChild.textContent = 'ส่งรูป'; }
+  };
+}
+function viewChatImage(id) {
+  modal(`<div class="preview"><img src="/api/chat/image?id=${encodeURIComponent(id)}" alt="รูปภาพ"></div>
+    <div class="actions"><a class="btn" href="/api/chat/image?id=${encodeURIComponent(id)}" download="chat-image-${encodeURIComponent(id)}">${icon('download')}บันทึกรูป</a><button class="btn primary" data-close>ปิด</button></div>`, { wide: true });
+}
+$('#chatAttach').onclick = () => $('#chatFile').click();
+$('#chatFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) sendImageDialog(f); };
+document.addEventListener('paste', (e) => {
+  if (state.view !== 'chat' || !chat.conv || !$('#modalRoot').hidden) return;
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  sendImageDialog(item.getAsFile());
+});
+
 $('#newChatBtn').onclick = () => {
   const { m, close } = modal(`<h3>แชทใหม่</h3><p class="desc">เลือกคนที่ต้องการคุยด้วย ข้อความส่วนตัวเห็นเฉพาะคุณสองคน</p>
     <label class="search people-search">${icon('search')}<input id="pplQ" placeholder="ค้นหาชื่อ" autofocus></label>

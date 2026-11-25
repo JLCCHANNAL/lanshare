@@ -112,6 +112,8 @@ def init_db() -> None:
         if "source" not in cols:
             con.execute("ALTER TABLE audit ADD COLUMN source TEXT NOT NULL DEFAULT 'web'")
         con.execute("CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)")
+        if "image" not in {r[1] for r in con.execute("PRAGMA table_info(chat_messages)")}:
+            con.execute("ALTER TABLE chat_messages ADD COLUMN image TEXT NOT NULL DEFAULT ''")
 
 
 DEFAULT_TAGLINE = "ระบบแชร์ไฟล์ภายในองค์กร"
@@ -274,6 +276,8 @@ def image_type(data: bytes) -> str | None:
         return "image/jpeg"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
     return None
 
 # ---------------------------------------------------------------- login throttling
@@ -515,15 +519,20 @@ def chat_row(r) -> dict:
     live = r["display_name"] is not None
     return {"id": r["id"], "conv": r["conv"], "sender": r["sender"], "body": r["body"], "ts": r["ts"],
             "name": r["display_name"] if live else r["sender_name"], "gone": not live,
-            "avatar": avatar_ver(r["sender"]) if live else 0}
+            "avatar": avatar_ver(r["sender"]) if live else 0, "image": bool(r["image"])}
 
 
-CHAT_SELECT = ("SELECT m.id, m.conv, m.sender, m.sender_name, m.body, m.ts, u.display_name FROM chat_messages m "
+CHAT_SELECT = ("SELECT m.id, m.conv, m.sender, m.sender_name, m.body, m.ts, m.image, u.display_name FROM chat_messages m "
                "LEFT JOIN users u ON u.id = m.sender ")
+CHAT_IMAGES = DATA / "chat-images"
+CHAT_IMAGE_MAX = 10 * 1024 * 1024
 
 
 def forget_user_chat(con: sqlite3.Connection, uid: int) -> None:
     """On account deletion: drop their private chats, keep room messages under their old name."""
+    for (img,) in con.execute("SELECT image FROM chat_messages WHERE image<>'' AND (conv LIKE ? OR conv LIKE ?)",
+                              (f"dm:{uid}-%", f"dm:%-{uid}")).fetchall():
+        (CHAT_IMAGES / Path(img).name).unlink(missing_ok=True)
     con.execute("DELETE FROM chat_messages WHERE conv LIKE ? OR conv LIKE ?", (f"dm:{uid}-%", f"dm:%-{uid}"))
     con.execute("DELETE FROM chat_read WHERE user_id=? OR conv LIKE ? OR conv LIKE ?", (uid, f"dm:{uid}-%", f"dm:%-{uid}"))
     con.execute("UPDATE chat_messages SET sender=0 WHERE sender=?", (uid,))    # ids may be reused later
@@ -1171,29 +1180,73 @@ class Handler(BaseHTTPRequestHandler):
                                (conv, before, before)).fetchall()
         self.send_json(200, {"messages": [chat_row(r) for r in reversed(rows)], "more": len(rows) == 60})
 
-    def api_post_chat_send(self):
-        u = self.require_user()
-        b = self.read_json()
-        conv = self.chat_conv(u, b.get("c"))
+    def chat_post(self, u: dict, conv: str, body: str, image: str = "") -> dict:
+        """Store a message (text and/or picture), mark it read for the sender, push it live."""
         peer = dm_peer(u, conv)
         if peer is not None:
             with db() as con:
                 p = load_user(con, peer)
             if not p or not p["active"]:
                 raise ApiError(400, "ผู้ใช้นี้ไม่ได้ใช้งานแล้ว ส่งข้อความไม่ได้")
-        body = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(b.get("body", "")).replace("\r\n", "\n")).strip()
-        if not body:
+        body = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(body or "").replace("\r\n", "\n")).strip()
+        if not body and not image:
             raise ApiError(400, "พิมพ์ข้อความก่อนส่ง")
         if len(body) > CHAT_MAX:
             raise ApiError(400, f"ข้อความยาวเกิน {CHAT_MAX} ตัวอักษร")
         with _db_lock, db() as con:
-            mid = con.execute("INSERT INTO chat_messages(conv, sender, sender_name, body, ts) VALUES(?,?,?,?,?)",
-                              (conv, u["id"], u["display_name"], body, int(time.time()))).lastrowid
+            mid = con.execute("INSERT INTO chat_messages(conv, sender, sender_name, body, ts, image) VALUES(?,?,?,?,?,?)",
+                              (conv, u["id"], u["display_name"], body, int(time.time()), image)).lastrowid
             con.execute("INSERT INTO chat_read VALUES(?,?,?) ON CONFLICT(user_id, conv) DO UPDATE SET last_id=excluded.last_id",
                         (u["id"], conv, mid))
             msg = chat_row(con.execute(CHAT_SELECT + "WHERE m.id=?", (mid,)).fetchone())
         CHAT.publish(conv, msg)
+        return msg
+
+    def api_post_chat_send(self):
+        u = self.require_user()
+        b = self.read_json()
+        self.send_json(200, {"message": self.chat_post(u, self.chat_conv(u, b.get("c")), b.get("body", ""))})
+
+    def api_put_chat_image(self):
+        """Body = the picture (the browser shrinks big photos first). ?c=conversation&caption=text"""
+        u = self.require_user()
+        q = self.query()
+        conv = self.chat_conv(u, q.get("c"))
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= CHAT_IMAGE_MAX:
+            raise ApiError(413, f"รูปใหญ่เกินไป (ไม่เกิน {CHAT_IMAGE_MAX // 1024 // 1024} MB)")
+        data = self.rfile.read(n)
+        kind = image_type(data)
+        if not kind:
+            raise ApiError(400, "รองรับเฉพาะรูป PNG, JPEG, WebP หรือ GIF")
+        name = secrets.token_hex(12) + {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}[kind]
+        CHAT_IMAGES.mkdir(parents=True, exist_ok=True)
+        (CHAT_IMAGES / name).write_bytes(data)
+        try:
+            msg = self.chat_post(u, conv, q.get("caption", ""), image=name)
+        except ApiError:
+            (CHAT_IMAGES / name).unlink(missing_ok=True)
+            raise
         self.send_json(200, {"message": msg})
+
+    def api_get_chat_image(self):
+        u = self.require_user()
+        mid = self.query().get("id", "")
+        with db() as con:
+            row = con.execute("SELECT conv, image FROM chat_messages WHERE id=?", (int(mid) if mid.isdigit() else -1,)).fetchone()
+        if not row or not row["image"] or not chat_access(u, row["conv"]):
+            raise ApiError(404, "ไม่พบรูปนี้")
+        try:
+            data = (CHAT_IMAGES / Path(row["image"]).name).read_bytes()
+        except OSError:
+            raise ApiError(404, "ไม่พบรูปนี้")
+        self.send_response(200)
+        self.send_header("Content-Type", image_type(data) or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+        self.security_headers()
+        self.end_headers()
+        self.wfile.write(data)
 
     def api_post_chat_read(self):
         u = self.require_user()

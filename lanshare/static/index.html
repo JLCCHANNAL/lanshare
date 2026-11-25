@@ -212,7 +212,9 @@
           <header class="chat-head" id="chatHead"></header>
           <div class="chat-msgs" id="chatMsgs"></div>
           <form class="chat-input" id="chatForm" autocomplete="off">
-            <textarea id="chatText" rows="1" maxlength="2000" placeholder="พิมพ์ข้อความ…" title="Enter = ส่ง · Shift+Enter = ขึ้นบรรทัดใหม่"></textarea>
+            <button type="button" class="icon-btn chat-attach" id="chatAttach" aria-label="ส่งรูปภาพ" title="ส่งรูปภาพ (หรือวางรูปด้วย Ctrl+V / ลากรูปมาวาง)"><svg><use href="#i-image"/></svg></button>
+            <input type="file" id="chatFile" accept="image/*" hidden>
+            <textarea id="chatText" rows="1" maxlength="2000" placeholder="พิมพ์ข้อความ… หรือวางรูป (Ctrl+V)" title="Enter = ส่ง · Shift+Enter = ขึ้นบรรทัดใหม่"></textarea>
             <button class="btn primary" aria-label="ส่ง"><svg><use href="#i-send"/></svg><span>ส่ง</span></button>
           </form>
         </div>

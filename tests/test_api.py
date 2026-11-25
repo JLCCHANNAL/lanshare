@@ -336,6 +336,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(p(f"acc01|1.2.3.4|Accounting|renameat|ok|{root}/Accounting/a.txt|{root}/Accounting/b.txt")["detail"],
                          "/Accounting/a.txt -> b.txt")
 
+    def test_chat_images(self):
+        acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 300
+        url = "/api/chat/image?c=dept:Accounting&caption=" + urllib.parse.quote("ใบเสร็จครับ")
+        s, r = acc.req("PUT", url, raw=png, headers={"Content-Type": "image/png"})
+        self.assertEqual(s, 200, r)
+        m = r["message"]
+        self.assertTrue(m["image"])
+        self.assertEqual(m["body"], "ใบเสร็จครับ")
+        self.assertEqual(ed.req("GET", f"/api/chat/image?id={m['id']}"), (200, png))       # editor can open Accounting
+        self.assertEqual(hr.req("GET", f"/api/chat/image?id={m['id']}")[0], 404)           # hr is not in that room
+        self.assertEqual(Client(self.port).req("GET", f"/api/chat/image?id={m['id']}")[0], 401)
+        self.assertTrue(ed.req("GET", "/api/chat/messages?c=dept:Accounting")[1]["messages"][-1]["image"])
+        # picture only, no caption
+        s, r = acc.req("PUT", "/api/chat/image?c=all", raw=b"GIF89a" + b"\0" * 50)
+        self.assertEqual((s, r["message"]["body"]), (200, ""))
+        # not a picture / not allowed room / too big
+        self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=b"<html>")[0], 400)
+        self.assertEqual(acc.req("PUT", "/api/chat/image?c=dept:HR", raw=png)[0], 403)
+        self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png + b"\0" * (10 * 1024 * 1024))[0], 413)
+        self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png, headers={"X-LANShare": "0"})[0], 403)
+
     def test_chat_presence(self):
         hr, acc = self.as_("hr"), self.as_("acc")
         h = self.uid(hr)
