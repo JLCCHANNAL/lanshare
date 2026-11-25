@@ -659,7 +659,7 @@ async function loadRecycle() {
     const { items } = await api('/api/recycle');
     $('#recycleTable').innerHTML = items.length ? `<thead><tr><th>รายการ</th><th>ลบโดย</th><th>เมื่อ</th><th></th></tr></thead><tbody>` +
       items.map((it) => `<tr><td><div class="who"><span class="ficon ${it.type === 'dir' ? 'dir' : kind(it.path)[0]}">${icon(it.type === 'dir' ? 'folder' : kind(it.path)[1])}</span><div><b>${esc(parts(it.path).pop())}</b><small>${esc(it.path)}</small></div></div></td>
-        <td>${esc(it.by)}</td><td class="muted">${fmtDate(it.ts)}</td>
+        <td>${esc(it.by)}</td><td class="muted">${fmtDate(it.ts)}<small class="left ${(it.expires - Date.now() / 1000) < 3 * 86400 ? 'soon' : ''}">${Math.max(0, Math.ceil((it.expires - Date.now() / 1000) / 86400))} วันก่อนลบถาวร</small></td>
         <td class="actions"><button class="btn ghost" data-restore="${it.id}">${icon('recycle')}กู้คืน</button>
         ${state.me.role === 'superadmin' ? `<button class="icon-btn" data-purge="${it.id}" aria-label="ลบถาวร">${icon('trash')}</button>` : ''}</td></tr>`).join('') + '</tbody>'
       : `<tbody><tr><td><div class="empty"><div class="big">${icon('bin')}</div><b>ถังขยะว่าง</b>ไฟล์ที่ถูกลบจะมาอยู่ที่นี่</div></td></tr></tbody>`;

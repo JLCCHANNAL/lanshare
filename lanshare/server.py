@@ -46,6 +46,7 @@ NETD_URL = os.environ.get("LANSHARE_NETD_URL", "").rstrip("/")   # optional host
 NETD_TOKEN_FILE = Path(os.environ.get("LANSHARE_NETD_TOKEN_FILE", "/etc/lanshare/netd.token"))
 STATIC = Path(__file__).resolve().parent / "static"
 RECYCLE = ".lanshare-recycle"           # hidden folder inside ROOT
+RECYCLE_DAYS = int(os.environ.get("LANSHARE_RECYCLE_DAYS", "30"))   # deleted items are kept this long
 ROLES = ("superadmin", "editor", "user")
 NAME_RE = re.compile(r'^[^/\\:*?"<>|\x00-\x1f]{1,200}$')
 USER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,31}$")
@@ -993,10 +994,10 @@ class Handler(BaseHTTPRequestHandler):
             for slot in sorted(base.iterdir(), reverse=True):
                 try:
                     meta = json.loads((slot / "meta.json").read_text(encoding="utf-8"))
-                    items.append({"id": slot.name, **meta})
+                    items.append({"id": slot.name, **meta, "expires": int(meta.get("ts", 0)) + RECYCLE_DAYS * 86400})
                 except (OSError, ValueError):
                     continue
-        self.send_json(200, {"items": items})
+        self.send_json(200, {"items": items, "days": RECYCLE_DAYS})
 
     def recycle_slot(self, rid: str) -> Path:
         if not re.fullmatch(r"\d+-[0-9a-f]{8}", rid or ""):
@@ -1518,12 +1519,40 @@ def create_user_cli(username: str, role: str, depts: list[str]) -> None:
     print(f"บันทึกผู้ใช้ {username} ({role}) แล้ว")
 
 
+def purge_old_recycle() -> int:
+    """Delete recycle-bin items older than RECYCLE_DAYS for good."""
+    base, n = ROOT / RECYCLE, 0
+    if not base.is_dir():
+        return 0
+    limit = time.time() - RECYCLE_DAYS * 86400
+    for slot in base.iterdir():
+        try:
+            meta = json.loads((slot / "meta.json").read_text(encoding="utf-8"))
+            if int(meta.get("ts", 0)) < limit:
+                shutil.rmtree(slot)
+                audit({"username": "ระบบ"}, "purge", f"{meta.get('path')} (ครบ {RECYCLE_DAYS} วัน)", ip="")
+                n += 1
+        except (OSError, ValueError):
+            continue
+    return n
+
+
+def purge_forever() -> None:
+    while True:
+        try:
+            purge_old_recycle()
+        except Exception as e:
+            sys.stderr.write(f"recycle purge: {e!r}\n")
+        time.sleep(3600)
+
+
 def serve() -> None:
     init_db()
     ROOT.mkdir(parents=True, exist_ok=True)
     os.umask(0o007)
     threading.Thread(target=HUB.poll_forever, daemon=True).start()
     threading.Thread(target=import_smb_audit_forever, daemon=True).start()
+    threading.Thread(target=purge_forever, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     httpd.daemon_threads = True
     print(f"LANShare กำลังทำงานที่ http://{HOST}:{PORT}  (โฟลเดอร์: {ROOT})", flush=True)

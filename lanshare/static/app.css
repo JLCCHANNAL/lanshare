@@ -693,3 +693,5 @@ h2 { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
 .cl-img img { max-width: 140px; max-height: 100px; border-radius: 8px; display: block; }
 .cl-conv { display: flex; align-items: center; gap: 10px; margin: -4px 0 12px; padding: 8px 12px; border-radius: 10px; background: rgb(var(--gold) / .1); font-size: 14px; }
 .cl-conv .btn { padding: 4px 10px; margin-left: auto; }
+.table small.left { display: block; font-size: 12px; color: var(--muted); }
+.table small.left.soon { color: var(--bad); font-weight: 600; }
