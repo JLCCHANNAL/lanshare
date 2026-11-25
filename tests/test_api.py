@@ -414,6 +414,25 @@ class ApiTests(unittest.TestCase):
             pass
         self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png, headers={"X-LANShare": "0"})[0], 403)
 
+    def test_profile_change_is_pushed_live(self):
+        hr, acc = self.as_("ed"), self.as_("acc")   # hr may be locked out by the throttle test
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/chat/events", headers={"Cookie": hr.cookie})
+        live = conn.getresponse()
+        got = b""
+        while b"event: ready" not in got:
+            got += live.readline()
+        acc.req("PUT", "/api/me/avatar", raw=b"\x89PNG\r\n\x1a\n" + b"\0" * 64, headers={"Content-Type": "image/png"})
+        deadline, got = time.time() + 5, b""
+        while time.time() < deadline and b"event: profile" not in got:
+            got += live.readline()
+        got += live.readline()
+        conn.close()
+        self.assertIn(b"event: profile", got)
+        data = json.loads(got.split(b"event: profile", 1)[1].split(b"data: ", 1)[1].split(b"\n", 1)[0])
+        self.assertEqual((data["username"], data["avatar"] > 0), ("acc", True))
+        acc.req("POST", "/api/me/avatar/delete")
+
     def test_chat_presence(self):
         hr, acc = self.as_("hr"), self.as_("acc")
         h = self.uid(hr)

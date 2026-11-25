@@ -694,6 +694,7 @@ function chatConnect() {
   es.addEventListener('msg', (e) => onChatMsg(JSON.parse(e.data)));
   es.addEventListener('presence', (e) => onPresence(JSON.parse(e.data)));
   es.addEventListener('react', (e) => onReact(JSON.parse(e.data)));
+  es.addEventListener('profile', (e) => onProfile(JSON.parse(e.data)));
   es.onopen = () => { if (state.view !== 'files') setLive(true); };
   es.onerror = () => { if (state.view !== 'files') setLive(false); };
 }
@@ -884,6 +885,16 @@ function reactPicker(btn) {
 }
 async function react(mid, emoji) {
   try { onReact(await api('/api/chat/react', { method: 'POST', json: { id: mid, emoji } })); } catch (e) { fail(e); }
+}
+function onProfile(u) {
+  // someone changed their picture or name: update every place it shows, no refresh needed
+  const p = chat.people.find((x) => x.id === u.id);
+  if (p) Object.assign(p, u);
+  chat.convs.forEach((c) => { if (c.peer?.id === u.id) { c.peer = { ...c.peer, ...u }; c.title = u.display_name; } });
+  chat.msgs.forEach((m) => { if (m.sender === u.id && !m.gone) { m.avatar = u.avatar; m.name = u.display_name; } });
+  if (state.me && u.id === state.me.id) { state.me = { ...state.me, ...u }; paintMe(); }
+  if (state.view === 'chat') { renderConvs(); if (chat.conv) { renderHead(); renderMsgs('stay'); } }
+  if (state.view === 'users') loadUsers();
 }
 function onReact(ev) {
   const m = chat.msgs.find((x) => x.id === ev.id);

@@ -464,6 +464,17 @@ class ChatHub:
         with self.lock:
             return set(self.conns)
 
+    def broadcast(self, event: str, payload: dict) -> None:
+        """Send an event to everyone signed in (profile changes)."""
+        data = json.dumps(payload, ensure_ascii=False)
+        with self.lock:
+            subs = list(self.subs)
+        for q in subs:
+            try:
+                q.put_nowait((event, data))
+            except queue.Full:
+                pass
+
     def presence(self, uid: int, on: bool) -> None:
         """Tell everyone signed in that a colleague came online / went offline."""
         data = json.dumps({"id": uid, "online": on, "seen": self.seen.get(uid, 0)})
@@ -494,6 +505,14 @@ class ChatHub:
 
 
 CHAT = ChatHub()
+
+
+def profile_changed(uid: int) -> None:
+    """Push a person's new picture / name to every open page right away."""
+    with db() as con:
+        u = load_user(con, uid)
+    if u:
+        CHAT.broadcast("profile", public_user(u))
 
 
 def dm_peer(u: dict, conv: str) -> int | None:
@@ -798,11 +817,13 @@ class Handler(BaseHTTPRequestHandler):
         tmp.write_bytes(data)
         os.replace(tmp, f)
         audit(u, "avatar", u["username"])
+        profile_changed(u["id"])
         self.send_json(200, {"user": public_user(u)})
 
     def api_post_me_avatar_delete(self):
         u = self.require_user()
         avatar_file(u["id"]).unlink(missing_ok=True)
+        profile_changed(u["id"])
         self.send_json(200, {"user": public_user(u)})
 
     def api_get_avatar(self):
@@ -1166,6 +1187,7 @@ class Handler(BaseHTTPRequestHandler):
             if "password" in b or b.get("active") is False:
                 con.execute("DELETE FROM sessions WHERE user_id=? AND user_id<>?", (uid, actor["id"]))
         audit(actor, "user-update", target["username"])
+        profile_changed(uid)
         self.send_json(200, {"ok": True})
 
     # ---- chat
