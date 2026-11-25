@@ -102,7 +102,7 @@ function modal(html, { wide = false } = {}) {
 function ask({ title, desc = '', label, value = '', ok = 'ตกลง', type = 'text' }) {
   return new Promise((resolve) => {
     const { m, close } = modal(`<form><h3>${esc(title)}</h3>${desc ? `<p class="desc">${esc(desc)}</p>` : ''}
-      <label class="field"><span>${esc(label)}</span><input name="v" type="${type}" value="${esc(value)}" autofocus required></label>
+      <label class="field"><span>${esc(label)}</span><input name="v" type="${type}" value="${esc(value)}" autocomplete="off" autofocus required></label>
       <div class="actions"><button type="button" class="btn" data-close>ยกเลิก</button><button class="btn primary">${esc(ok)}</button></div></form>`);
     const inp = $('input', m);
     if (value && type === 'text') { const dot = value.lastIndexOf('.'); setTimeout(() => inp.setSelectionRange(0, dot > 0 ? dot : value.length), 40); }
