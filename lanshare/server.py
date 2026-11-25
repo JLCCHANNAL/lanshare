@@ -853,6 +853,18 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(403, "ที่หน้าแรกสร้างได้เฉพาะผู้ดูแลและผู้แก้ไข กรุณาเปิดโฟลเดอร์ฝ่ายก่อน" if not folder
                            else "คุณไม่มีสิทธิ์อัปโหลดในโฟลเดอร์นี้")
         dest_dir = real_path(folder)
+        created_at = None                                   # first folder we had to create (folder uploads)
+        if not dest_dir.is_dir() and q.get("mkdirs") == "1" and folder:
+            for i in range(1, len(folder) + 1):
+                d = real_path(folder[:i])
+                if d.exists() and not d.is_dir():
+                    raise ApiError(409, f"มีไฟล์ชื่อ “{folder[i - 1]}” อยู่แล้ว สร้างโฟลเดอร์ชื่อเดียวกันไม่ได้")
+                if not d.exists():
+                    if i == 1 and not can_write(u, []):
+                        raise ApiError(403, "สร้างโฟลเดอร์ที่หน้าแรกได้เฉพาะผู้ดูแลและผู้แก้ไข")
+                    check_name(folder[i - 1])
+                    d.mkdir()
+                    created_at = created_at if created_at is not None else i - 1
         if not dest_dir.is_dir():
             raise ApiError(404, "ไม่พบโฟลเดอร์ปลายทาง")
         dest = real_path(folder + [name])
@@ -879,6 +891,8 @@ class Handler(BaseHTTPRequestHandler):
                 tmp.unlink()
         audit(u, "upload", "/" + "/".join(folder + [name]))
         changed(folder)
+        if created_at is not None:
+            changed(folder[:created_at])                    # show the new sub-folder to people looking at its parent
         self.send_json(200, {"ok": True})
 
     def api_post_mkdir(self):

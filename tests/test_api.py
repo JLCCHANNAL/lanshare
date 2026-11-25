@@ -5,6 +5,7 @@ Run:  python -m unittest discover -s tests -v
 import http.client
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -336,6 +337,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(p(f"acc01|1.2.3.4|Accounting|renameat|ok|{root}/Accounting/a.txt|{root}/Accounting/b.txt")["detail"],
                          "/Accounting/a.txt -> b.txt")
 
+    def test_folder_upload(self):
+        acc, boss = self.as_("acc"), self.as_("boss")
+        up = lambda c, path, extra="&mkdirs=1": c.req("PUT", "/api/upload?path=" + urllib.parse.quote(path) + extra, raw=b"data")
+        self.assertEqual(up(acc, "/Accounting/Project X/2026/q1.xlsx")[0], 200)
+        self.assertEqual(up(acc, "/Accounting/Project X/notes.txt")[0], 200)
+        self.assertTrue((TMP / "share" / "Accounting" / "Project X" / "2026" / "q1.xlsx").is_file())
+        self.assertEqual(up(acc, "/Accounting/NoParents/a.txt", extra="")[0], 404)          # needs mkdirs=1
+        self.assertEqual(up(acc, "/Accounting/Project X/notes.txt")[0], 409)                # exists, no overwrite
+        self.assertEqual(up(acc, "/Accounting/Project X/notes.txt", "&mkdirs=1&overwrite=1")[0], 200)
+        self.assertEqual(up(acc, "/HR/Sneaky/a.txt")[0], 403)                               # not acc's department
+        self.assertEqual(up(acc, "/NewDept/a.txt")[0], 403)                                 # users cannot add departments
+        self.assertEqual(up(acc, "/Accounting/bad:name/a.txt")[0], 400)
+        self.assertEqual(up(boss, "/Marketing/plan.txt")[0], 200)                           # admins can
+        self.assertTrue((TMP / "share" / "Marketing" / "plan.txt").is_file())
+        shutil.rmtree(TMP / "share" / "Marketing")
+
     def test_chat_images(self):
         acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 300
@@ -355,7 +372,10 @@ class ApiTests(unittest.TestCase):
         # not a picture / not allowed room / too big
         self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=b"<html>")[0], 400)
         self.assertEqual(acc.req("PUT", "/api/chat/image?c=dept:HR", raw=png)[0], 403)
-        self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png + b"\0" * (10 * 1024 * 1024))[0], 413)
+        try:                                   # the server refuses before reading 10 MB; Windows may report a dropped connection
+            self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png + b"\0" * (10 * 1024 * 1024))[0], 413)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass
         self.assertEqual(acc.req("PUT", "/api/chat/image?c=all", raw=png, headers={"X-LANShare": "0"})[0], 403)
 
     def test_chat_presence(self):

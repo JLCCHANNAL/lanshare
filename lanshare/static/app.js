@@ -470,8 +470,18 @@ $('#newFolderBtn').onclick = async () => {
 };
 
 // ------------------------------------------------------------------ upload (button + drag & drop)
-$('#uploadBtn').onclick = () => $('#fileInput').click();
+$('#uploadBtn').onclick = (e) => {                          // small menu: files or a whole folder
+  e.stopPropagation();
+  const r = e.currentTarget.getBoundingClientRect(), ctx = $('#ctx');
+  ctx.innerHTML = `<button data-up="file">${icon('file')}อัปโหลดไฟล์</button><button data-up="folder">${icon('folder')}อัปโหลดทั้งโฟลเดอร์</button>`;
+  ctx.hidden = false;
+  ctx.style.left = Math.max(8, r.right - ctx.offsetWidth) + 'px';
+  ctx.style.top = r.bottom + 6 + 'px';
+  $$('[data-up]', ctx).forEach((b) => (b.onclick = (ev) => { ev.stopPropagation(); ctx.hidden = true; $(b.dataset.up === 'folder' ? '#folderInput' : '#fileInput').click(); }));
+};
+document.addEventListener('click', (e) => { if (!e.target.closest('#ctx')) $('#ctx').hidden = true; });
 $('#fileInput').onchange = (e) => { upload([...e.target.files]); e.target.value = ''; };
+$('#folderInput').onchange = (e) => { upload([...e.target.files].map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }))); e.target.value = ''; };
 let dragDepth = 0;
 const dragHasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
 window.addEventListener('dragenter', (e) => {
@@ -488,44 +498,71 @@ window.addEventListener('drop', (e) => {
   if (state.view === 'chat') { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) sendImageDialog(f); else toast('ลากมาได้เฉพาะไฟล์รูปภาพ', 'warn'); return; }
   if (state.view !== 'files') return;
   if (!state.canWrite) return toast(state.path === '/' ? 'เปิดโฟลเดอร์ของฝ่ายก่อน แล้วจึงอัปโหลด' : 'คุณไม่มีสิทธิ์อัปโหลดในโฟลเดอร์นี้', 'warn');
-  upload([...e.dataTransfer.files]);
+  filesFromDrop(e.dataTransfer).then(upload).catch((err) => fail(err));
 });
 $('#uploadsClose').onclick = () => { $('#uploads').hidden = true; $('#uploadList').innerHTML = ''; };
 
-async function upload(files) {
-  if (!files.length) return;
+// files to upload come as {file, rel}: rel = path inside the dropped/picked folder ("Report/2026/a.xlsx")
+const JUNK = /(^|\/)(Thumbs\.db|desktop\.ini|\.DS_Store|~\$[^/]*)$/i;
+async function filesFromDrop(dt) {
+  const entries = [...(dt.items || [])].map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
+  if (!entries.length) return [...dt.files].map((f) => ({ file: f, rel: f.name }));
+  const out = [];
+  const readAll = (dir) => new Promise((resolve, reject) => {
+    const reader = dir.createReader(), all = [];
+    const next = () => reader.readEntries((batch) => { if (!batch.length) resolve(all); else { all.push(...batch); next(); } }, reject);
+    next();
+  });
+  const walk = async (ent, prefix) => {
+    if (ent.isFile) out.push({ file: await new Promise((res, rej) => ent.file(res, rej)), rel: prefix + ent.name });
+    else if (ent.isDirectory) for (const child of await readAll(ent)) await walk(child, prefix + ent.name + '/');
+  };
+  for (const ent of entries) await walk(ent, '');
+  return out;
+}
+async function upload(list) {
+  let items = list.map((x) => (x instanceof File ? { file: x, rel: x.name } : x)).filter((x) => !JUNK.test(x.rel));
+  if (!items.length) return toast('ไม่มีไฟล์ให้อัปโหลด (โฟลเดอร์ว่าง)', 'warn');
   const folder = state.path;
+  // a folder that already exists here: ask once whether to merge into it
+  const tops = [...new Set(items.filter((x) => x.rel.includes('/')).map((x) => x.rel.split('/')[0]))];
+  const mergeOk = new Set();
+  for (const top of tops) {
+    if (!state.entries.some((e) => e.name === top)) continue;
+    if (await confirmBox({ title: `มีโฟลเดอร์ “${top}” อยู่แล้ว`, desc: 'รวมไฟล์เข้าไปในโฟลเดอร์เดิมหรือไม่? ไฟล์ที่ชื่อซ้ำจะถูกแทนที่ด้วยไฟล์ใหม่', ok: 'รวมเข้าไป' })) mergeOk.add(top);
+    else items = items.filter((x) => x.rel.split('/')[0] !== top);
+  }
   $('#uploads').hidden = false;
-  let ok = 0;
-  for (const f of files) {
+  let ok = 0, bad = 0;
+  for (const { file: f, rel } of items) {
+    const nested = rel.includes('/');
     const row = document.createElement('div');
     row.className = 'up';
-    row.innerHTML = `<div class="t"><span>${esc(f.name)}</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div>`;
+    row.innerHTML = `<div class="t"><span title="${esc(rel)}">${esc(rel)}</span><span class="pct">0%</span></div><div class="track"><div class="fill"></div></div>`;
     $('#uploadList').prepend(row);
-    const exists = state.entries.some((e) => e.name === f.name);
-    let overwrite = false;
-    if (exists) {
+    let overwrite = nested && mergeOk.has(rel.split('/')[0]);
+    if (!nested && state.entries.some((e) => e.name === f.name)) {
       overwrite = await confirmBox({ title: `มีไฟล์ “${f.name}” อยู่แล้ว`, desc: 'ต้องการแทนที่ไฟล์เดิมหรือไม่?', ok: 'แทนที่' });
       if (!overwrite) { row.classList.add('fail'); $('.pct', row).textContent = 'ข้าม'; continue; }
     }
     try {
       await new Promise((resolve, reject) => {
         const x = new XMLHttpRequest();
-        x.open('PUT', `/api/upload?path=${encodeURIComponent(join(folder, f.name))}${overwrite ? '&overwrite=1' : ''}`);
+        x.open('PUT', `/api/upload?path=${encodeURIComponent(join(folder, rel))}${overwrite ? '&overwrite=1' : ''}${nested ? '&mkdirs=1' : ''}`);
         x.setRequestHeader('X-LANShare', '1');
         x.upload.onprogress = (ev) => { if (ev.lengthComputable) { const p = Math.round(ev.loaded / ev.total * 100); $('.fill', row).style.width = p + '%'; $('.pct', row).textContent = p + '%'; } };
         x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch (e) {} x.status < 300 ? resolve() : reject(new Error(d.error || 'อัปโหลดไม่สำเร็จ')); };
-        x.onerror = () => reject(new Error('การเชื่อมต่อขาดหาย'));
+        x.onerror = () => reject(new Error(f.size === 0 && !f.type ? 'อ่านไฟล์นี้ไม่ได้ (ถ้าเป็นโฟลเดอร์ ให้ลากมาวาง หรือใช้ อัปโหลด → อัปโหลดทั้งโฟลเดอร์)' : 'การเชื่อมต่อกับเซิร์ฟเวอร์ขาดหาย กรุณาลองใหม่'));
         x.send(f);
       });
       row.classList.add('done'); $('.fill', row).style.width = '100%'; $('.pct', row).textContent = 'เสร็จ'; ok++;
-    } catch (e) { row.classList.add('fail'); $('.pct', row).textContent = 'ไม่สำเร็จ'; fail(new Error(`${f.name}: ${e.message}`)); }
+    } catch (e) { row.classList.add('fail'); $('.pct', row).textContent = 'ไม่สำเร็จ'; bad++; if (bad <= 3) fail(new Error(`${rel}: ${e.message}`)); }
   }
-  if (ok) toast(`อัปโหลดสำเร็จ ${ok} ไฟล์`, 'ok');
+  if (ok) toast(`อัปโหลดสำเร็จ ${ok} ไฟล์${bad ? ` · ไม่สำเร็จ ${bad} ไฟล์` : ''}`, bad ? 'warn' : 'ok');
+  else if (bad > 3) toast(`อัปโหลดไม่สำเร็จ ${bad} ไฟล์`, 'err');
   if (state.path === folder) openFolder(folder, { quiet: true });
   setTimeout(() => { if (!$('#uploadList .up:not(.done):not(.fail)')) { $('#uploads').hidden = true; $('#uploadList').innerHTML = ''; } }, 4000);
 }
-
 // ------------------------------------------------------------------ real-time updates (Server-Sent Events)
 function setLive(on) { $('#live').classList.toggle('on', on); $('#live').title = on ? 'อัปเดตอัตโนมัติ: เชื่อมต่อแล้ว' : 'อัปเดตอัตโนมัติ: กำลังเชื่อมต่อ…'; }
 let refreshTimer;
