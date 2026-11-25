@@ -178,8 +178,16 @@ def parse_smb_audit(msg: str) -> dict | None:
         if len(args) < 2 or args[0] != "w":
             return None                                   # only writes; reads are far too noisy
         args = args[1:]
-    paths = ["/" + share + "/" + (a[2:] if a.startswith("./") else a).lstrip("/") if a not in (".", "") else "/" + share
-             for a in args]
+    root = ROOT.as_posix().rstrip("/")
+
+    def vpath(a: str) -> str:
+        if a.startswith(root + "/"):                       # newer Samba logs absolute paths
+            return a[len(root):]
+        if a.startswith("/"):
+            return "/" + share + "/" + a.rsplit("/", 1)[-1]
+        return "/" + share + ("/" + (a[2:] if a.startswith("./") else a) if a not in (".", "") else "")
+
+    paths = [vpath(a) for a in args]
     if any(SMB_NOISE.search(p) for p in paths) and op != "renameat":
         return None
     if op == "renameat":
@@ -198,6 +206,15 @@ def parse_smb_audit(msg: str) -> dict | None:
 def import_smb_audit_forever() -> None:
     if not shutil.which("journalctl"):
         return
+    try:   # rows imported before absolute paths were understood: "/Share/srv/share/Share/x" -> "/Share/x"
+        bad = re.compile(r"/[^/ ]+" + re.escape(ROOT.as_posix().rstrip("/")) + "/")
+        with _db_lock, db() as con:
+            for rid, detail in con.execute("SELECT rowid, detail FROM audit WHERE source='smb'").fetchall():
+                fixed = bad.sub("/", detail)
+                if fixed != detail:
+                    con.execute("UPDATE audit SET detail=? WHERE rowid=?", (fixed, rid))
+    except sqlite3.Error:
+        pass
     while True:
         try:
             cursor = get_setting("smb_cursor", "")

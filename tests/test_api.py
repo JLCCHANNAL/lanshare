@@ -331,6 +331,10 @@ class ApiTests(unittest.TestCase):
                          {"username": "acc01", "ip": "1.2.3.4", "action": "smb-write", "detail": "/Common/plan.docx"})
         self.assertEqual(p("acc01|1.2.3.4|Common|renameat|ok|a.txt|.recycle/acc01/a.txt")["action"], "delete")
         self.assertEqual(p("acc01|1.2.3.4|Sales|mkdirat|ok|Q4")["detail"], "/Sales/Q4")
+        root = server.ROOT.as_posix().rstrip("/")                                          # newer Samba: absolute paths
+        self.assertEqual(p(f"acc01|1.2.3.4|Accounting|unlinkat|ok|{root}/Accounting/x.txt")["detail"], "/Accounting/x.txt")
+        self.assertEqual(p(f"acc01|1.2.3.4|Accounting|renameat|ok|{root}/Accounting/a.txt|{root}/Accounting/b.txt")["detail"],
+                         "/Accounting/a.txt -> b.txt")
 
     def test_chat_presence(self):
         hr, acc = self.as_("hr"), self.as_("acc")
