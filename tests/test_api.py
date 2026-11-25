@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="lanshare-test-"))
@@ -295,6 +296,55 @@ class ApiTests(unittest.TestCase):
         boss.req("POST", "/api/users", {"username": "smart2", "display_name": "sltch", "password": PW, "role": "user", "depts": []})
         self.assertEqual(Client(self.port).req("POST", "/api/login", {"username": "sltch", "password": PW})[0], 401)
         self.assertEqual(Client(self.port).login("smart2")[0], 200)
+
+    def test_activity_log(self):
+        boss, acc = self.as_("boss"), self.as_("acc")
+        acc.req("PUT", "/api/upload?path=" + urllib.parse.quote("/Accounting/act-test.txt"), raw=b"hi")
+        acc.req("GET", "/api/download?path=" + urllib.parse.quote("/Accounting/act-test.txt"))
+        self.assertEqual(acc.req("GET", "/api/activity")[0], 403)
+        self.assertEqual(self.as_("ed").req("GET", "/api/activity")[0], 403)
+        s, r = boss.req("GET", "/api/activity?user=acc&group=files")
+        self.assertEqual(s, 200)
+        acts = [(i["action"], i["detail"]) for i in r["items"]]
+        self.assertIn(("upload", "/Accounting/act-test.txt"), acts)
+        self.assertIn(("download", "/Accounting/act-test.txt"), acts)
+        self.assertEqual(r["items"][0]["ip"], "127.0.0.1")
+        self.assertTrue(all(i["username"] == "acc" for i in r["items"]))
+        self.assertIn("acc", r["users"])
+        s, body = boss.req("GET", "/api/activity?q=act-test")
+        self.assertTrue(body["items"])
+        s, csv = boss.req("GET", "/api/activity/csv?user=acc")
+        self.assertEqual(s, 200)
+        self.assertTrue(csv.startswith("﻿เวลา".encode()))
+        self.assertIn(b"/Accounting/act-test.txt", csv)
+
+    def test_parse_samba_audit(self):
+        p = server.parse_smb_audit
+        self.assertEqual(p("acc01|192.168.100.145|Accounting|unlinkat|ok|sub/report.xlsx"),
+                         {"username": "acc01", "ip": "192.168.100.145", "action": "delete", "detail": "/Accounting/sub/report.xlsx"})
+        self.assertEqual(p("acc01|1.2.3.4|Accounting|openat|ok|w|a.docx")["action"], "smb-write")
+        self.assertIsNone(p("acc01|1.2.3.4|Accounting|openat|ok|r|a.docx"))            # reads are skipped
+        self.assertIsNone(p("acc01|1.2.3.4|Accounting|unlinkat|fail (No such file)|x"))
+        self.assertIsNone(p("acc01|1.2.3.4|Accounting|openat|ok|w|~$a.docx"))          # Office lock file
+        self.assertEqual(p("acc01|1.2.3.4|Common|renameat|ok|a.txt|b.txt")["detail"], "/Common/a.txt -> b.txt")
+        self.assertEqual(p("acc01|1.2.3.4|Common|renameat|ok|~WRL0001.tmp|plan.docx"),       # Office save
+                         {"username": "acc01", "ip": "1.2.3.4", "action": "smb-write", "detail": "/Common/plan.docx"})
+        self.assertEqual(p("acc01|1.2.3.4|Common|renameat|ok|a.txt|.recycle/acc01/a.txt")["action"], "delete")
+        self.assertEqual(p("acc01|1.2.3.4|Sales|mkdirat|ok|Q4")["detail"], "/Sales/Q4")
+
+    def test_chat_presence(self):
+        hr, acc = self.as_("hr"), self.as_("acc")
+        h = self.uid(hr)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/chat/events", headers={"Cookie": hr.cookie})
+        live = conn.getresponse()
+        got = b""
+        while b"event: ready" not in got:
+            got += live.readline()
+        r = acc.req("GET", "/api/chat/convs")[1]
+        self.assertIn(h, r["online"])
+        self.assertTrue(next(p for p in r["people"] if p["id"] == h)["online"])
+        conn.close()
 
     def test_profile_picture(self):
         c = self.as_("ed")

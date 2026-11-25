@@ -37,7 +37,22 @@ function kind(name) {
   if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return ['zip', 'file', ext.toUpperCase().slice(0, 3)];
   return ['other', 'file', ext.slice(0, 4).toUpperCase()];
 }
-const previewable = (name) => /\.(png|jpe?g|gif|webp|bmp|pdf|txt)$/i.test(name);
+// department badge: an icon picked from the name (or its initials) on a colour of its own
+const DEPT_KINDS = [
+  [/account|บัญชี|finance|การเงิน/i, 'calc', 152], [/sale|ขาย/i, 'chart', 28], [/\bhr\b|^hr|บุคคล|human|people/i, 'users', 268],
+  [/common|กลาง|share|ทั่วไป|public|all/i, 'globe', 212], [/\bit\b|^it|ไอที|tech|computer/i, 'monitor', 192],
+  [/market|การตลาด|pr\b/i, 'megaphone', 340], [/admin|ธุรการ|office|สำนักงาน/i, 'building', 222],
+  [/product|ผลิต|factory|โรงงาน|engineer|วิศว/i, 'factory', 40], [/purchas|จัดซื้อ|procure/i, 'cart', 96], [/legal|กฎหมาย/i, 'scale', 0],
+];
+const DEPT_HUES = [212, 28, 152, 268, 340, 192, 40, 96, 0, 236];
+function deptBadge(name, cls = '') {
+  const hit = DEPT_KINDS.find(([re]) => re.test(name));
+  let hue = hit ? hit[2] : 0;
+  if (!hit) { let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0; hue = DEPT_HUES[h % DEPT_HUES.length]; }
+  const inner = hit ? icon(hit[1]) : `<b class="ini">${esc(monogram(name))}</b>`;
+  return `<span class="dept ${cls} h${hue}">${inner}</span>`;
+}
+const previewable =(name) => /\.(png|jpe?g|gif|webp|bmp|pdf|txt)$/i.test(name);
 
 async function api(url, opts = {}) {
   const res = await fetch(url, { credentials: 'same-origin', ...opts,
@@ -180,11 +195,14 @@ function monogram(name) {
 function paintOrg(o) {
   $$('.app-name').forEach((e) => (e.textContent = o.name));
   $$('.org-tag').forEach((e) => (e.textContent = o.tagline));
-  $$('[data-mono]').forEach((e) => (e.textContent = monogram(o.name)));
+  // designed mark for names starting with J (Jlc Industry); other names get a clean letter mark
+  const mark = /^\s*j/i.test(o.name) ? '<svg class="logo-mark"><use href="#i-logo-j"/></svg>' : `<b class="logo-ini">${esc(monogram(o.name).charAt(0))}</b><i class="logo-dot"></i>`;
+  $$('[data-mono]').forEach((e) => (e.innerHTML = mark));
   document.title = o.name;
   state.org = o;
 }
 paintOrg({ name: $('.app-name').textContent, tagline: $('.org-tag').textContent });
+$('#footYear').textContent = new Date().getFullYear();
 $('#orgForm').onsubmit = async (e) => {
   e.preventDefault();
   const f = e.target;
@@ -250,7 +268,7 @@ async function start(user) {
   $('#login').hidden = true; $('#app').hidden = false;
   paintMe();
   $('#adminNav').hidden = user.role === 'user';
-  $('#netNav').hidden = user.role !== 'superadmin';
+  $('#netNav').hidden = $('#actNav').hidden = user.role !== 'superadmin';
   await loadDepts();
   route();
   chatConnect();
@@ -263,6 +281,7 @@ function route() {
   if (h === 'users' && state.me.role !== 'user') return showView('users');
   if (h === 'recycle' && state.me.role !== 'user') return showView('recycle');
   if (h === 'network' && state.me.role === 'superadmin') return showView('network');
+  if (h === 'activity' && state.me.role === 'superadmin') return showView('activity');
   if (h === 'chat' || h.startsWith('chat/')) return showView('chat', h.slice(5) || null);
   showView('files', h.startsWith('/') ? h : '/');
 }
@@ -276,6 +295,9 @@ function showView(view, path) {
   $('#viewRecycle').hidden = view !== 'recycle';
   $('#viewNetwork').hidden = view !== 'network';
   $('#viewChat').hidden = view !== 'chat';
+  $('#viewActivity').hidden = view !== 'activity';
+  clearInterval(act.timer);
+  if (view === 'activity') { loadActivity(); act.timer = setInterval(() => { if (!act.more && !document.hidden) loadActivity(); }, 15000); }
   $('#main').classList.toggle('is-chat', view === 'chat');
   if (view !== 'chat') { chat.conv = null; paintUnread(); }
   $('#search').parentElement.hidden = view !== 'files';
@@ -297,7 +319,7 @@ function markNav() {
 async function loadDepts() {
   try { state.depts = (await api('/api/depts')).depts; } catch (e) { state.depts = []; }
   $('#deptNav').innerHTML = state.depts.length
-    ? state.depts.map((d) => `<button class="nav-item" data-view="files" data-path="/${esc(d)}">${icon('folder')}<span>${esc(d)}</span></button>`).join('')
+    ? state.depts.map((d) => `<button class="nav-item" data-view="files" data-path="/${esc(d)}">${deptBadge(d, 'sm')}<span>${esc(d)}</span></button>`).join('')
     : `<p class="muted nav-label">ยังไม่มีโฟลเดอร์</p>`;
   markNav();
 }
@@ -354,7 +376,7 @@ function render() {
       const vp = join(state.path, e.name);
       return `<div class="row item ${state.sel.has(vp) ? 'sel' : ''} ${state.fresh?.includes(e.name) ? 'fresh' : ''}" data-path="${esc(vp)}" data-type="${e.type}" tabindex="0">
         <input type="checkbox" class="check" ${state.sel.has(vp) ? 'checked' : ''} aria-label="เลือก ${esc(e.name)}" ${state.canWrite ? '' : 'disabled tabindex="-1"'}>
-        <div class="name"><button data-open>${`<span class="ficon ${k}">${icon(ic)}${label && k !== 'img' ? `<b>${esc(label)}</b>` : ''}</span>`}<span>${esc(e.name)}</span></button></div>
+        <div class="name"><button data-open>${state.path === '/' && e.type === 'dir' ? deptBadge(e.name) : `<span class="ficon ${k}">${icon(ic)}${label && k !== 'img' ? `<b>${esc(label)}</b>` : ''}</span>`}<span>${esc(e.name)}</span></button></div>
         <span class="size">${e.type === 'dir' ? '—' : fmtSize(e.size)}</span>
         <span class="date" title="${new Date(e.mtime * 1000).toLocaleString('th-TH')}">${fmtDate(e.mtime)}</span>
         <button class="icon-btn more" aria-label="ตัวเลือก">${icon('dots')}</button></div>`;
@@ -611,7 +633,7 @@ async function loadRecycle() {
 }
 
 // ------------------------------------------------------------------ chat (rooms + direct messages, live over SSE)
-const chat = { convs: [], people: [], conv: null, msgs: [], more: false, es: null };
+const chat = { convs: [], people: [], conv: null, msgs: [], more: false, es: null, online: new Set() };
 const dmId = (pid) => `dm:${Math.min(pid, state.me.id)}-${Math.max(pid, state.me.id)}`;
 const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
 function chatDay(ts) {
@@ -629,11 +651,12 @@ function chatConnect() {
   const es = new EventSource('/api/chat/events');
   chat.es = es;
   es.addEventListener('msg', (e) => onChatMsg(JSON.parse(e.data)));
+  es.addEventListener('presence', (e) => onPresence(JSON.parse(e.data)));
   es.onopen = () => { if (state.view !== 'files') setLive(true); };
   es.onerror = () => { if (state.view !== 'files') setLive(false); };
 }
 async function refreshConvs() {
-  try { const r = await api('/api/chat/convs'); chat.convs = r.convs; chat.people = r.people; } catch (e) { return; }
+  try { const r = await api('/api/chat/convs'); chat.convs = r.convs; chat.people = r.people; chat.online = new Set(r.online); } catch (e) { return; }
   paintUnread();
   if (state.view === 'chat') renderConvs();
 }
@@ -662,6 +685,34 @@ async function markRead(conv) {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.view === 'chat' && chat.conv) markRead(chat.conv); });
 
+// ---- presence: who has the app open right now (works on the LAN, no internet needed)
+const isOnline = (id) => chat.online.has(id);
+const withDot = (html, id) => (id ? `<span class="av-wrap">${html}<i class="dot ${isOnline(id) ? 'on' : ''}" title="${isOnline(id) ? 'ออนไลน์' : 'ออฟไลน์'}"></i></span>` : html);
+function presenceText(id) {
+  if (!id) return 'ข้อความส่วนตัว';
+  if (isOnline(id)) return '● ออนไลน์';
+  const p = chat.people.find((x) => x.id === id);
+  return p?.seen ? `ใช้งานล่าสุด ${fmtDate(p.seen)}` : 'ออฟไลน์';
+}
+function roomOnline(c) {
+  const ids = [state.me.id, ...chat.people.filter((p) => c.kind === 'all' || p.role !== 'user' || p.depts.includes(c.title)).map((p) => p.id)];
+  return ids.filter((id) => id === state.me.id || isOnline(id)).length;
+}
+function onPresence(ev) {
+  ev.online ? chat.online.add(ev.id) : chat.online.delete(ev.id);
+  const p = chat.people.find((x) => x.id === ev.id);
+  if (p && ev.seen) p.seen = ev.seen;
+  if (state.view === 'chat') { renderConvs(); if (chat.conv) renderHead(); }
+  const list = $('#pplList');
+  if (list) $('#pplQ').dispatchEvent(new Event('input'));
+}
+function onlineStrip() {
+  const on = chat.people.filter((p) => isOnline(p.id));
+  return `<p class="conv-label">ออนไลน์ตอนนี้ · ${on.length + 1} คน</p>
+    <div class="online-strip">${on.length ? on.map((p) => `<button class="online-person" data-pid="${p.id}" title="คุยกับ ${esc(p.display_name)}">${withDot(`<span class="avatar">${avatarInner(p)}</span>`, p.id)}<small>${esc(p.display_name.split(' ')[0])}</small></button>`).join('')
+      : '<span class="muted conv-empty">ยังไม่มีคนอื่นออนไลน์</span>'}</div>`;
+}
+
 function convInfo(id) {
   let c = chat.convs.find((x) => x.id === id);
   if (!c && id && id.startsWith('dm:')) {
@@ -672,8 +723,8 @@ function convInfo(id) {
   return c;
 }
 const convAvatar = (c) => (c.kind === 'dm'
-  ? `<span class="avatar">${c.peer ? avatarInner(c.peer) : '?'}</span>`
-  : `<span class="avatar room ${c.kind}">${icon(c.kind === 'all' ? 'users' : 'folder')}</span>`);
+  ? withDot(`<span class="avatar">${c.peer ? avatarInner(c.peer) : '?'}</span>`, c.peer?.id)
+  : c.kind === 'dept' ? deptBadge(c.title, 'round') : `<span class="avatar room ${c.kind}">${icon('users')}</span>`);
 
 function renderConvs() {
   const list = [...chat.convs];
@@ -687,13 +738,14 @@ function renderConvs() {
       ${c.unread && c.id !== chat.conv ? `<span class="pill">${c.unread}</span>` : ''}</button>`;
   };
   const rooms = list.filter((c) => c.kind !== 'dm'), dms = list.filter((c) => c.kind === 'dm');
-  $('#convList').innerHTML = `<p class="conv-label">ห้องแชท</p>${rooms.map(item).join('')}
+  $('#convList').innerHTML = `${onlineStrip()}<p class="conv-label">ห้องแชท</p>${rooms.map(item).join('')}
     <p class="conv-label">ข้อความส่วนตัว</p>${dms.map(item).join('') || '<p class="muted conv-empty">กด “แชทใหม่” เพื่อคุยกับเพื่อนร่วมงานหรือผู้ดูแล</p>'}`;
   $$('#convList [data-conv]').forEach((b) => (b.onclick = () => { location.hash = 'chat/' + b.dataset.conv; }));
+  $$('#convList [data-pid]').forEach((b) => (b.onclick = () => { location.hash = 'chat/' + dmId(+b.dataset.pid); }));
 }
 function renderHead() {
   const c = convInfo(chat.conv);
-  const sub = c.kind === 'all' ? 'ทุกคนในองค์กรเห็นข้อความในห้องนี้' : c.kind === 'dept' ? `ทุกคนที่เข้าโฟลเดอร์ ${c.title} ได้` : c.peer ? `ข้อความส่วนตัว · ${ROLE[c.peer.role]}` : 'ข้อความส่วนตัว';
+  const sub = c.kind === 'dm' ? presenceText(c.peer?.id) : `ออนไลน์ ${roomOnline(c)} คน · ${c.kind === 'all' ? 'ทุกคนในองค์กรเห็นห้องนี้' : `ทุกคนที่เข้าโฟลเดอร์ ${c.title} ได้`}`;
   $('#chatHead').innerHTML = `<button class="icon-btn chat-back" id="chatBack" aria-label="กลับ">${icon('back')}</button>${convAvatar(c)}
     <div class="chat-title"><b>${esc(c.title)}</b><small>${esc(sub)}</small></div>`;
   $('#chatBack').onclick = () => { location.hash = 'chat'; };
@@ -770,13 +822,67 @@ $('#newChatBtn').onclick = () => {
   const paint = () => {
     const q = $('#pplQ', m).value.trim().toLowerCase();
     $('#pplList', m).innerHTML = chat.people.filter((p) => !q || `${p.display_name} ${p.username}`.toLowerCase().includes(q))
-      .map((p) => `<button class="person" data-pid="${p.id}"><span class="avatar">${avatarInner(p)}</span><span><b>${esc(p.display_name)}</b><small>${esc(p.username)} · ${ROLE[p.role]}</small></span>${icon('chat')}</button>`).join('')
+      .map((p) => `<button class="person" data-pid="${p.id}">${withDot(`<span class="avatar">${avatarInner(p)}</span>`, p.id)}<span><b>${esc(p.display_name)}</b><small>${presenceText(p.id)} · ${ROLE[p.role]}</small></span>${icon('chat')}</button>`).join('')
       || '<p class="muted">ไม่พบชื่อนี้</p>';
     $$('[data-pid]', m).forEach((b) => (b.onclick = () => { close(); location.hash = 'chat/' + dmId(+b.dataset.pid); }));
   };
   $('#pplQ', m).oninput = paint;
   paint();
 };
+
+// ------------------------------------------------------------------ activity log (super admin)
+const ACT = {
+  upload: ['อัปโหลด', 'upload', 'ok'], download: ['ดาวน์โหลด', 'download', ''], preview: ['เปิดดู', 'eye', ''],
+  mkdir: ['สร้างโฟลเดอร์', 'plus-folder', 'ok'], rename: ['เปลี่ยนชื่อ', 'edit', ''], delete: ['ลบ', 'trash', 'bad'],
+  restore: ['กู้คืน', 'recycle', 'ok'], purge: ['ลบถาวร', 'trash', 'bad'], 'smb-write': ['สร้าง/แก้ไขไฟล์', 'file', 'ok'],
+  login: ['เข้าสู่ระบบ', 'key', ''], 'login-failed': ['เข้าระบบไม่สำเร็จ', 'alert', 'bad'], logout: ['ออกจากระบบ', 'logout', ''],
+  'user-create': ['เพิ่มผู้ใช้', 'users', 'ok'], 'user-update': ['แก้ไขผู้ใช้', 'users', ''], 'user-delete': ['ลบผู้ใช้', 'users', 'bad'],
+  'self-delete': ['ลบบัญชีตัวเอง', 'users', 'bad'], 'change-password': ['เปลี่ยนรหัสผ่าน', 'key', ''], avatar: ['เปลี่ยนรูปโปรไฟล์', 'image', ''],
+  'org-settings': ['ตั้งค่าองค์กร', 'gear', ''], 'net-save': ['ตั้งค่าเครือข่าย', 'wifi', ''], 'net-apply': ['สลับเครือข่าย', 'wifi', ''],
+  'net-dhcp': ['เครือข่ายอัตโนมัติ', 'wifi', ''],
+};
+const act = { items: [], more: false, timer: null };
+function uaShort(ua) {
+  const b = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : '';
+  const o = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+  return [b, o].filter(Boolean).join(' บน ') || ua;
+}
+function actParams(extra = {}) {
+  const f = $('#actFilters'), p = new URLSearchParams();
+  for (const k of ['q', 'user', 'group', 'source']) if (f[k].value) p.set(k, f[k].value);
+  for (const [k, v] of Object.entries(extra)) p.set(k, v);
+  return p.toString();
+}
+async function loadActivity(more = false) {
+  try {
+    const r = await api('/api/activity?' + actParams(more && act.items.length ? { before: act.items[act.items.length - 1].id } : {}));
+    act.items = more ? [...act.items, ...r.items] : r.items;
+    act.more = r.more;
+    const sel = $('#actFilters').user, cur = sel.value;
+    sel.innerHTML = '<option value="">ทุกคน</option>' + r.users.map((u) => `<option ${u === cur ? 'selected' : ''}>${esc(u)}</option>`).join('');
+    renderActivity();
+  } catch (e) { fail(e); }
+}
+function renderActivity() {
+  $('#actTable').innerHTML = act.items.length
+    ? `<thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>รายการ</th><th>ช่องทาง</th></tr></thead><tbody>` + act.items.map((a) => {
+      const [label, ic, tone] = ACT[a.action] || [a.action, 'info', ''];
+      const when = new Date(a.ts * 1000);
+      const detail = a.action === 'login' ? uaShort(a.detail) : a.detail;
+      return `<tr><td class="act-when" title="${esc(when.toLocaleString('th-TH'))}"><b>${when.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</b><small>${chatDay(a.ts)}</small></td>
+        <td><b>${esc(a.username)}</b></td><td><span class="act-badge ${tone}">${icon(ic)}${label}</span></td>
+        <td class="act-detail">${esc(detail)}</td>
+        <td><span class="src ${esc(a.source)}">${a.source === 'smb' ? 'ไดรฟ์ Windows' : 'หน้าเว็บ'}</span><small class="muted">${esc(a.ip)}</small></td></tr>`;
+    }).join('') + '</tbody>'
+    : `<tbody><tr><td><div class="empty"><div class="big">${icon('activity')}</div><b>ไม่พบกิจกรรม</b>ลองเปลี่ยนตัวกรองหรือคำค้นหา</div></td></tr></tbody>`;
+  $('#actMore').hidden = !act.more;
+}
+let actDebounce;
+$('#actFilters').oninput = () => { clearTimeout(actDebounce); actDebounce = setTimeout(() => loadActivity(), 300); };
+$('#actFilters').onsubmit = (e) => e.preventDefault();
+$('#actRefresh').onclick = () => loadActivity();
+$('#actMore').onclick = () => loadActivity(true);
+$('#actCsv').onclick = () => { location.href = '/api/activity/csv?' + actParams(); };
 
 // ------------------------------------------------------------------ network settings (super admin)
 const IPV4 = '(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}';

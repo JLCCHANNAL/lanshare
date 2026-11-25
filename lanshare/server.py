@@ -22,6 +22,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -105,6 +106,12 @@ def init_db() -> None:
               PRIMARY KEY(user_id, conv));
             """
         )
+        cols = {r[1] for r in con.execute("PRAGMA table_info(audit)")}
+        if "ip" not in cols:
+            con.execute("ALTER TABLE audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
+        if "source" not in cols:
+            con.execute("ALTER TABLE audit ADD COLUMN source TEXT NOT NULL DEFAULT 'web'")
+        con.execute("CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts)")
 
 
 DEFAULT_TAGLINE = "ระบบแชร์ไฟล์ภายในองค์กร"
@@ -135,9 +142,87 @@ def clean_text(v, field: str, lo: int, hi: int) -> str:
     return s
 
 
-def audit(user: dict, action: str, detail: str) -> None:
+_req = threading.local()          # client IP of the request being handled (for the activity log)
+_recent: dict[tuple, float] = {}  # repeated downloads/previews within a minute are logged once
+
+
+def audit(user: dict, action: str, detail: str, *, ip: str | None = None, source: str = "web", ts: int | None = None) -> None:
+    ip = ip if ip is not None else getattr(_req, "ip", "")
+    if action in ("download", "preview", "smb-write"):
+        key, now = (user["username"], action, detail), time.time()
+        if now - _recent.get(key, 0) < 60:
+            return
+        _recent[key] = now
+        if len(_recent) > 5000:
+            _recent.clear()
     with _db_lock, db() as con:
-        con.execute("INSERT INTO audit VALUES(?,?,?,?)", (int(time.time()), user["username"], action, detail))
+        con.execute("INSERT INTO audit(ts, username, action, detail, ip, source) VALUES(?,?,?,?,?,?)",
+                    (ts or int(time.time()), user["username"], action, detail, ip or "", source))
+
+# ---------------------------------------------------------------- Windows-drive (Samba) activity
+# Samba's full_audit module writes one syslog line per operation, e.g.
+#   smbd_audit: acc01|192.168.100.145|Accounting|unlinkat|ok|sub/report.xlsx
+# A background thread reads them from the journal and stores them next to the web activity.
+
+SMB_NOISE = re.compile(r"(^|/)(~\$|\.~lock|~WRL|Thumbs\.db$|desktop\.ini$|\.DS_Store$|\._)|\.tmp$|(^|/)\.recycle(/|$)", re.I)
+SMB_OPS = {"mkdirat": "mkdir", "renameat": "rename", "unlinkat": "delete", "openat": "smb-write"}
+
+
+def parse_smb_audit(msg: str) -> dict | None:
+    f = msg.split("|")
+    if len(f) < 6 or f[4] != "ok" or f[3] not in SMB_OPS:
+        return None
+    user, ip, share, op = f[0], f[1], f[2], f[3]
+    args = f[5:]
+    if op == "openat":
+        if len(args) < 2 or args[0] != "w":
+            return None                                   # only writes; reads are far too noisy
+        args = args[1:]
+    paths = ["/" + share + "/" + (a[2:] if a.startswith("./") else a).lstrip("/") if a not in (".", "") else "/" + share
+             for a in args]
+    if any(SMB_NOISE.search(p) for p in paths) and op != "renameat":
+        return None
+    if op == "renameat":
+        if len(paths) < 2 or all(SMB_NOISE.search(p) for p in paths):
+            return None
+        detail = f"{paths[0]} -> {paths[1].rsplit('/', 1)[-1]}"
+        if re.search(r"/\.recycle(/|$)", paths[1]):         # Samba recycle bin: this is a delete
+            op, detail = "unlinkat", paths[0]
+        elif SMB_NOISE.search(paths[0]):                    # Office "save": temp file renamed over the real one
+            op, detail = "openat", paths[1]
+    else:
+        detail = paths[0]
+    return {"username": user, "ip": ip, "action": SMB_OPS[op], "detail": detail}
+
+
+def import_smb_audit_forever() -> None:
+    if not shutil.which("journalctl"):
+        return
+    while True:
+        try:
+            cursor = get_setting("smb_cursor", "")
+            cmd = ["journalctl", "-t", "smbd_audit", "-o", "json", "--no-pager", "-q"]
+            cmd += [f"--after-cursor={cursor}"] if cursor else ["--since", "-1d"]
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+            last = None
+            for line in out.splitlines():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                last = e.get("__CURSOR") or last
+                msg = e.get("MESSAGE")
+                if isinstance(msg, list):                     # non-UTF-8 messages come as byte lists
+                    msg = bytes(msg).decode("utf-8", "replace")
+                ev = parse_smb_audit(str(msg or ""))
+                if ev:
+                    audit({"username": ev["username"]}, ev["action"], ev["detail"], ip=ev["ip"], source="smb",
+                          ts=int(int(e.get("__REALTIME_TIMESTAMP", "0")) / 1_000_000) or None)
+            if last:
+                set_setting("smb_cursor", last)
+        except Exception as e:  # never stop the importer
+            sys.stderr.write(f"smb audit import: {e!r}\n")
+        time.sleep(5)
 
 
 def load_user(con: sqlite3.Connection, user_id: int) -> dict | None:
@@ -324,16 +409,46 @@ class ChatHub:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.subs: dict[queue.Queue, int] = {}       # queue -> user id
+        self.conns: dict[int, int] = {}              # user id -> open live connections (tabs/devices)
+        self.seen: dict[int, int] = {}               # user id -> when they were last online
 
     def subscribe(self, uid: int) -> queue.Queue:
         q: queue.Queue = queue.Queue(maxsize=200)
         with self.lock:
             self.subs[q] = uid
+            self.conns[uid] = self.conns.get(uid, 0) + 1
+            came_online = self.conns[uid] == 1
+        if came_online:
+            self.presence(uid, True)
         return q
 
     def unsubscribe(self, q: queue.Queue) -> None:
         with self.lock:
-            self.subs.pop(q, None)
+            uid = self.subs.pop(q, None)
+            went_offline = False
+            if uid is not None:
+                self.conns[uid] = self.conns.get(uid, 1) - 1
+                if self.conns[uid] <= 0:
+                    self.conns.pop(uid, None)
+                    self.seen[uid] = int(time.time())
+                    went_offline = True
+        if went_offline:
+            self.presence(uid, False)
+
+    def online(self) -> set[int]:
+        with self.lock:
+            return set(self.conns)
+
+    def presence(self, uid: int, on: bool) -> None:
+        """Tell everyone signed in that a colleague came online / went offline."""
+        data = json.dumps({"id": uid, "online": on, "seen": self.seen.get(uid, 0)})
+        with self.lock:
+            subs = list(self.subs)
+        for q in subs:
+            try:
+                q.put_nowait(("presence", data))
+            except queue.Full:
+                pass
 
     def publish(self, conv: str, payload: dict) -> None:
         with self.lock:
@@ -348,7 +463,7 @@ class ChatHub:
         for q, uid in subs:
             if allowed.get(uid):
                 try:
-                    q.put_nowait(data)
+                    q.put_nowait(("msg", data))
                 except queue.Full:
                     pass
 
@@ -487,6 +602,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def dispatch(self, method: str) -> None:
         path = urllib.parse.urlsplit(self.path).path
+        _req.ip = self.client_address[0]
         try:
             if path.startswith("/api/"):
                 if method != "GET":
@@ -547,6 +663,8 @@ class Handler(BaseHTTPRequestHandler):
         if reason:
             record_fail(key)
             sys.stderr.write(f"login failed for {typed[:40]!r} from {self.client_address[0]}: {reason}\n")
+            audit({"username": row["username"] if row else typed[:40] or "?"}, "login-failed",
+                  {"no such user": "ไม่มีชื่อผู้ใช้นี้", "account disabled": "บัญชีถูกปิดใช้งาน"}.get(reason, "รหัสผ่านไม่ถูกต้อง"))
             raise ApiError(401, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
         tok = secrets.token_urlsafe(32)
         with _db_lock, db() as con:
@@ -555,10 +673,14 @@ class Handler(BaseHTTPRequestHandler):
         cookie = f"ls_session={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_HOURS * 3600}"
         with db() as con:
             u = load_user(con, row["id"])
+        audit(u, "login", (self.headers.get("User-Agent") or "")[:120])
         self.send_json(200, {"user": public_user(u)}, {"Set-Cookie": cookie})
 
     def api_post_logout(self):
         tok = self.cookie_token()
+        u = self.current_user()
+        if u:
+            audit(u, "logout", "")
         if tok:
             with _db_lock, db() as con:
                 con.execute("DELETE FROM sessions WHERE token=?", (tok,))
@@ -682,6 +804,7 @@ class Handler(BaseHTTPRequestHandler):
                 ctype = "application/octet-stream"
         size = p.stat().st_size
         fname = urllib.parse.quote(p.name)
+        audit(u, "preview" if inline else "download", "/" + "/".join(parts))
         self.send_response(200)
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype == "text/plain" else ""))
         self.send_header("Content-Length", str(size))
@@ -1016,7 +1139,10 @@ class Handler(BaseHTTPRequestHandler):
                 out.append(item)
             people = [public_user(load_user(con, r["id"])) for r in
                       con.execute("SELECT id FROM users WHERE active=1 AND id<>? ORDER BY display_name", (u["id"],))]
-        self.send_json(200, {"convs": out, "people": people})
+        online = CHAT.online()
+        for p in people:
+            p["online"], p["seen"] = p["id"] in online, CHAT.seen.get(p["id"], 0)
+        self.send_json(200, {"convs": out, "people": people, "online": sorted(online)})
 
     def api_get_chat_messages(self):
         u = self.require_user()
@@ -1075,7 +1201,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             while True:
                 try:
-                    self.wfile.write(f"event: msg\ndata: {q.get(timeout=20)}\n\n".encode())
+                    event, data = q.get(timeout=20)
+                    self.wfile.write(f"event: {event}\ndata: {data}\n\n".encode())
                 except queue.Empty:
                     self.wfile.write(b": keep-alive\n\n")
                 self.wfile.flush()
@@ -1083,6 +1210,58 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             CHAT.unsubscribe(q)
+
+    # ---- activity log (super admin): who did what to which file, from the web and the Windows drive
+    ACT_GROUPS = {
+        "files": ("upload", "download", "preview", "mkdir", "rename", "delete", "restore", "purge", "smb-write"),
+        "access": ("login", "login-failed", "logout"),
+        "admin": ("user-create", "user-update", "user-delete", "self-delete", "change-password", "avatar",
+                  "org-settings", "net-save", "net-apply", "net-dhcp"),
+    }
+
+    def activity_query(self, q: dict, limit: int):
+        where, args = [], []
+        if q.get("user"):
+            where.append("username = ?"); args.append(q["user"])
+        if q.get("group") in self.ACT_GROUPS:
+            acts = self.ACT_GROUPS[q["group"]]
+            where.append(f"action IN ({','.join('?' * len(acts))})"); args += acts
+        if q.get("source") in ("web", "smb"):
+            where.append("source = ?"); args.append(q["source"])
+        if q.get("q"):
+            where.append("(detail LIKE ? OR username LIKE ? OR ip LIKE ?)"); args += [f"%{q['q']}%"] * 3
+        if str(q.get("before", "")).isdigit():
+            where.append("rowid < ?"); args.append(int(q["before"]))
+        sql = ("SELECT rowid AS id, ts, username, action, detail, ip, source FROM audit"
+               + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY rowid DESC LIMIT ?")
+        with db() as con:
+            return [dict(r) for r in con.execute(sql, (*args, limit))]
+
+    def api_get_activity(self):
+        self.require_superadmin()
+        q = self.query()
+        items = self.activity_query(q, 101)
+        with db() as con:
+            users = [r[0] for r in con.execute("SELECT DISTINCT username FROM audit ORDER BY username")]
+        self.send_json(200, {"items": items[:100], "more": len(items) > 100, "users": users,
+                             "smb": bool(shutil.which("journalctl"))})
+
+    def api_get_activity_csv(self):
+        self.require_superadmin()
+        rows = self.activity_query(self.query(), 50000)
+        lines = ["เวลา,ผู้ใช้,การกระทำ,รายการ,ช่องทาง,IP"]
+        for r in rows:
+            cells = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])), r["username"], r["action"], r["detail"],
+                     "ไดรฟ์ Windows" if r["source"] == "smb" else "หน้าเว็บ", r["ip"]]
+            lines.append(",".join('"' + str(c).replace('"', '""') + '"' if re.search(r'[",\n]|^[=+\-@]', str(c)) else str(c) for c in cells))
+        body = ("﻿" + "\r\n".join(lines)).encode("utf-8")       # BOM so Excel shows Thai correctly
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f"attachment; filename=activity-{time.strftime('%Y%m%d')}.csv")
+        self.send_header("Content-Length", str(len(body)))
+        self.security_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     # ---- network settings (super admin; proxied to the helper on the Proxmox host)
     def require_superadmin(self) -> dict:
@@ -1172,6 +1351,7 @@ def serve() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     os.umask(0o007)
     threading.Thread(target=HUB.poll_forever, daemon=True).start()
+    threading.Thread(target=import_smb_audit_forever, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     httpd.daemon_threads = True
     print(f"LANShare กำลังทำงานที่ http://{HOST}:{PORT}  (โฟลเดอร์: {ROOT})", flush=True)

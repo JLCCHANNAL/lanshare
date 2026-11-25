@@ -38,6 +38,9 @@ if [ -n "${LANSHARE_ORG:-}" ]; then
   (cd "$APP_DIR" && runuser -u lanshare -- env $(grep -v '^#' /etc/default/lanshare | xargs) \
      python3 -m lanshare.server set-name "$LANSHARE_ORG")
 fi
+# activity log: allow reading Samba's audit lines from the journal, and turn them on if Samba is here
+usermod -aG systemd-journal lanshare 2>/dev/null || true
+[ -f /etc/samba/smb.conf ] && bash "$SRC/deploy/samba-audit.sh" || true
 systemctl daemon-reload
 systemctl enable --now lanshare
 systemctl restart lanshare
