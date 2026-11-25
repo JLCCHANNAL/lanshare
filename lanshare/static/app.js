@@ -268,7 +268,7 @@ async function start(user) {
   $('#login').hidden = true; $('#app').hidden = false;
   paintMe();
   $('#adminNav').hidden = user.role === 'user';
-  $('#netNav').hidden = $('#actNav').hidden = user.role !== 'superadmin';
+  $('#netNav').hidden = $('#actNav').hidden = $('#chatlogNav').hidden = user.role !== 'superadmin';
   await loadDepts();
   route();
   chatConnect();
@@ -282,6 +282,7 @@ function route() {
   if (h === 'recycle' && state.me.role !== 'user') return showView('recycle');
   if (h === 'network' && state.me.role === 'superadmin') return showView('network');
   if (h === 'activity' && state.me.role === 'superadmin') return showView('activity');
+  if (h === 'chatlog' && state.me.role === 'superadmin') return showView('chatlog');
   if (h === 'chat' || h.startsWith('chat/')) return showView('chat', h.slice(5) || null);
   showView('files', h.startsWith('/') ? h : '/');
 }
@@ -296,6 +297,8 @@ function showView(view, path) {
   $('#viewNetwork').hidden = view !== 'network';
   $('#viewChat').hidden = view !== 'chat';
   $('#viewActivity').hidden = view !== 'activity';
+  $('#viewChatlog').hidden = view !== 'chatlog';
+  if (view === 'chatlog') loadChatlog();
   clearInterval(act.timer);
   if (view === 'activity') { loadActivity(); act.timer = setInterval(() => { if (!act.more && !document.hidden) loadActivity(); }, 15000); }
   $('#main').classList.toggle('is-chat', view === 'chat');
@@ -897,46 +900,63 @@ function addSent(message) {
 }
 // ---- pictures in chat: pick a file, paste from the clipboard, or drag one in
 async function shrinkImage(file) {
-  if (file.type === 'image/gif') return file;                              // keep animations as they are
-  const img = await new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file), i = new Image();
-    i.onload = () => { URL.revokeObjectURL(url); resolve(i); };
-    i.onerror = () => { URL.revokeObjectURL(url); reject(new Error('เปิดรูปนี้ไม่ได้ ลองใช้ JPG หรือ PNG')); };
-    i.src = url;
-  });
-  const scale = Math.min(1, 1920 / Math.max(img.naturalWidth, img.naturalHeight));
-  if (scale === 1 && file.size <= 1.5 * 1024 * 1024 && /^image\/(png|jpeg|webp)$/.test(file.type)) return file;
+  // keep files that are already small enough (GIFs keep their animation); otherwise resize to 1600 px JPEG — fast to make and to send
+  const keep = file.type === 'image/gif' || (file.size <= 600 * 1024 && /^image\/(png|jpeg|webp)$/.test(file.type));
+  if (keep) return file;
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (e) { throw new Error('เปิดรูปนี้ไม่ได้ ลองใช้ JPG หรือ PNG'); }
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
-  c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
-  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  const webp = await new Promise((r) => c.toBlob(r, 'image/webp', 0.88));
-  return webp && webp.type === 'image/webp' ? webp : new Promise((r) => c.toBlob(r, 'image/jpeg', 0.88));
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);         // transparent PNGs get a white background in JPEG
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  const jpg = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+  return jpg && jpg.size < file.size ? jpg : file;
+}
+function putWithProgress(url, body, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', url);
+    x.setRequestHeader('X-LANShare', '1');
+    x.setRequestHeader('Content-Type', body.type || 'application/octet-stream');
+    x.upload.onprogress = (ev) => { if (ev.lengthComputable) onProgress(ev.loaded / ev.total); };
+    x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch (e) { /* ignore */ } x.status < 300 ? resolve(d) : reject(new Error(d.error || `ส่งไม่สำเร็จ (${x.status})`)); };
+    x.onerror = () => reject(new Error('การเชื่อมต่อกับเซิร์ฟเวอร์ขาดหาย กรุณาลองใหม่'));
+    x.send(body);
+  });
 }
 function sendImageDialog(file) {
   if (!chat.conv) return toast('เลือกห้องแชทก่อน แล้วค่อยส่งรูป', 'warn');
   if (!file || !file.type.startsWith('image/')) return toast('ส่งได้เฉพาะไฟล์รูปภาพ', 'err');
   if (file.size > 40 * 1024 * 1024) return toast('ไฟล์รูปใหญ่เกิน 40 MB', 'err');
-  const url = URL.createObjectURL(file);
-  const { m, close } = modal(`<form><h3>ส่งรูปภาพ</h3><p class="desc">ถึง ${esc(convInfo(chat.conv)?.title || '')}</p>
+  const url = URL.createObjectURL(file), conv = chat.conv;
+  const { m, close } = modal(`<form><h3>ส่งรูปภาพ</h3><p class="desc">ถึง ${esc(convInfo(conv)?.title || '')}</p>
     <div class="img-preview"><img src="${url}" alt="ตัวอย่างรูป"></div>
+    <p class="img-size muted" id="imgSize">กำลังเตรียมรูป…</p>
     <label class="field"><span>คำอธิบาย (ไม่ใส่ก็ได้)</span><input name="cap" maxlength="2000" value="${esc($('#chatText').value.trim())}" placeholder="พิมพ์ข้อความประกอบรูป" autofocus></label>
+    <div class="send-progress" hidden><div class="track"><div class="fill"></div></div><b class="pct">0%</b></div>
     <div class="actions"><button type="button" class="btn" data-close>ยกเลิก</button><button class="btn primary">${icon('send')}<span>ส่งรูป</span></button></div></form>`);
+  const ready = shrinkImage(file);                       // start right away, while the person types a caption
+  ready.then((b) => { const s = $('#imgSize', m); if (s) s.textContent = b === file ? `ขนาด ${fmtSize(b.size)}` : `ขนาดที่จะส่ง ${fmtSize(b.size)} (ย่อจาก ${fmtSize(file.size)})`; })
+    .catch(() => { const s = $('#imgSize', m); if (s) s.textContent = ''; });
   const f = $('form', m);
   f.onsubmit = async (e) => {
     e.preventDefault();
-    const btn = $('.btn.primary', m), cap = f.cap.value.trim();
-    btn.disabled = true; btn.lastChild.textContent = 'กำลังส่ง…';
+    const btn = $('.btn.primary', m), cap = f.cap.value.trim(), bar = $('.send-progress', m);
+    const show = (p) => { $('.fill', bar).style.width = Math.round(p * 100) + '%'; $('.pct', bar).textContent = Math.round(p * 100) + '%'; btn.lastChild.textContent = `กำลังส่ง ${Math.round(p * 100)}%`; };
+    btn.disabled = true; btn.lastChild.textContent = 'กำลังเตรียมรูป…'; bar.hidden = false; show(0);
     try {
-      const blob = await shrinkImage(file);
-      const r = await api(`/api/chat/image?c=${encodeURIComponent(chat.conv)}&caption=${encodeURIComponent(cap)}`,
-        { method: 'PUT', body: blob, headers: { 'Content-Type': blob.type || 'application/octet-stream' } });
+      const blob = await ready;
+      const r = await putWithProgress(`/api/chat/image?c=${encodeURIComponent(conv)}&caption=${encodeURIComponent(cap)}`, blob, show);
+      show(1);
       if (cap && cap === $('#chatText').value.trim()) { $('#chatText').value = ''; growChat(); }
       close(); URL.revokeObjectURL(url);
-      addSent(r.message);
-    } catch (err) { fail(err); btn.disabled = false; btn.lastChild.textContent = 'ส่งรูป'; }
+      if (chat.conv === conv) addSent(r.message);
+    } catch (err) { fail(err); btn.disabled = false; btn.lastChild.textContent = 'ส่งรูป'; bar.hidden = true; }
   };
-}
-function viewChatImage(id) {
+}function viewChatImage(id) {
   modal(`<div class="preview"><img src="/api/chat/image?id=${encodeURIComponent(id)}" alt="รูปภาพ"></div>
     <div class="actions"><a class="btn" href="/api/chat/image?id=${encodeURIComponent(id)}" download="chat-image-${encodeURIComponent(id)}">${icon('download')}บันทึกรูป</a><button class="btn primary" data-close>ปิด</button></div>`, { wide: true });
 }
@@ -1018,6 +1038,39 @@ $('#actFilters').onsubmit = (e) => e.preventDefault();
 $('#actRefresh').onclick = () => loadActivity();
 $('#actMore').onclick = () => loadActivity(true);
 $('#actCsv').onclick = () => { location.href = '/api/activity/csv?' + actParams(); };
+
+// ------------------------------------------------------------------ chat log (super admin)
+const cl = { items: [], more: false };
+const CL_KIND = { dm: ['ข้อความส่วนตัว', 'key'], all: ['ห้องทุกคน', 'users'], dept: ['ห้องฝ่าย', 'folder'] };
+async function loadChatlog(more = false) {
+  const f = $('#clFilters'), p = new URLSearchParams();
+  if (f.user.value) p.set('user', f.user.value);
+  if (f.kind.value) p.set('kind', f.kind.value);
+  if (more && cl.items.length) p.set('before', cl.items[cl.items.length - 1].id);
+  try {
+    const r = await api('/api/chatlog?' + p);
+    cl.items = more ? [...cl.items, ...r.items] : r.items; cl.more = r.more;
+    const cur = f.user.value;
+    f.user.innerHTML = '<option value="">ทุกคน</option>' + r.users.map((u) => `<option value="${u.id}" ${String(u.id) === cur ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
+    $('#clTable').innerHTML = cl.items.length
+      ? `<thead><tr><th>เวลา</th><th>ผู้ส่ง</th><th>ถึง</th><th>เนื้อหา</th></tr></thead><tbody>` + cl.items.map((it) => {
+        const [kindLabel, ic] = CL_KIND[it.kind], when = new Date(it.ts * 1000);
+        const what = it.kind === 'dm'
+          ? `<span class="muted">🔒 ข้อความส่วนตัว${it.image ? ' · 📷 รูปภาพ' : ''}${it.chars ? ` · ${it.chars} ตัวอักษร` : ''}</span>`
+          : `${it.image ? '<span class="act-badge">📷 รูปภาพ</span> ' : ''}${esc(it.body || '')}`;
+        return `<tr><td class="act-when" title="${esc(when.toLocaleString('th-TH'))}"><b>${when.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</b><small>${chatDay(it.ts)}</small></td>
+          <td><b>${esc(it.from)}</b></td>
+          <td><span class="act-badge ${it.kind === 'dm' ? 'bad' : ''}">${icon(ic)}${kindLabel}</span><small class="cl-to">${it.kind === 'dm' ? 'ถึง ' : ''}${esc(it.to)}</small></td>
+          <td class="act-detail">${what}</td></tr>`;
+      }).join('') + '</tbody>'
+      : `<tbody><tr><td><div class="empty"><div class="big">${icon('chat')}</div><b>ยังไม่มีข้อความ</b>ลองเปลี่ยนตัวกรอง</div></td></tr></tbody>`;
+    $('#clMore').hidden = !cl.more;
+  } catch (e) { fail(e); }
+}
+$('#clFilters').oninput = () => loadChatlog();
+$('#clFilters').onsubmit = (e) => e.preventDefault();
+$('#clRefresh').onclick = () => loadChatlog();
+$('#clMore').onclick = () => loadChatlog(true);
 
 // ------------------------------------------------------------------ network settings (super admin)
 const IPV4 = '(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}';

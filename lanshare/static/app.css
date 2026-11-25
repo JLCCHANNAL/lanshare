@@ -679,3 +679,10 @@ h2 { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
 .bubble-wrap { min-width: 0; max-width: 100%; }
 .chat-img img { max-width: min(320px, 100%); }
 .bubble.has-img { max-width: 100%; }
+/* picture send: size + progress */
+.img-size { margin: -6px 0 12px; font-size: 13px; }
+.send-progress { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; }
+.send-progress .track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.send-progress .fill { height: 100%; width: 0; background: rgb(var(--a)); border-radius: 99px; transition: width .15s; }
+.send-progress .pct { font-size: 13px; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.cl-to { display: block; margin-top: 3px; font-size: 13px; color: var(--ink-2); }

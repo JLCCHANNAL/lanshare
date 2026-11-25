@@ -1398,6 +1398,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- chat log (super admin): who wrote to whom and when. Room messages are shown in full (the super
+    # admin can open every room anyway); private messages show only sender, recipient, time and length.
+    def api_get_chatlog(self):
+        self.require_superadmin()
+        q = self.query()
+        where, args = [], []
+        if q.get("kind") == "dm":
+            where.append("m.conv LIKE 'dm:%'")
+        elif q.get("kind") == "room":
+            where.append("m.conv NOT LIKE 'dm:%'")
+        if str(q.get("user", "")).isdigit():
+            uid = int(q["user"])
+            where.append("(m.sender = ? OR m.conv LIKE ? OR m.conv LIKE ?)"); args += [uid, f"dm:{uid}-%", f"dm:%-{uid}"]
+        if str(q.get("before", "")).isdigit():
+            where.append("m.id < ?"); args.append(int(q["before"]))
+        sql = (CHAT_SELECT + ("WHERE " + " AND ".join(where) + " " if where else "") + "ORDER BY m.id DESC LIMIT 101")
+        with db() as con:
+            rows = con.execute(sql, args).fetchall()
+            names = {r["id"]: r["display_name"] for r in con.execute("SELECT id, display_name FROM users")}
+            users = [{"id": r["id"], "name": r["display_name"]} for r in con.execute("SELECT id, display_name FROM users ORDER BY display_name")]
+        items = []
+        for r in rows[:100]:
+            conv, private = r["conv"], r["conv"].startswith("dm:")
+            if private:
+                a, b = (int(x) for x in conv[3:].split("-"))
+                to = names.get(b if r["sender"] == a else a, "ผู้ใช้ที่ถูกลบ")
+            else:
+                to = "ทุกคนในองค์กร" if conv == "all" else conv[5:]
+            items.append({"id": r["id"], "ts": r["ts"], "from": r["display_name"] or r["sender_name"], "to": to,
+                          "kind": "dm" if private else ("all" if conv == "all" else "dept"), "image": bool(r["image"]),
+                          "chars": len(r["body"]), "body": None if private else r["body"]})
+        self.send_json(200, {"items": items, "more": len(rows) > 100, "users": users})
+
     # ---- network settings (super admin; proxied to the helper on the Proxmox host)
     def require_superadmin(self) -> dict:
         u = self.require_user()

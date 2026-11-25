@@ -138,6 +138,7 @@
         <button class="nav-item" data-view="users"><svg><use href="#i-users"/></svg>จัดการผู้ใช้</button>
         <button class="nav-item" data-view="recycle"><svg><use href="#i-bin"/></svg>ถังขยะ</button>
         <button class="nav-item" data-view="activity" id="actNav" hidden><svg><use href="#i-activity"/></svg>บันทึกกิจกรรม</button>
+        <button class="nav-item" data-view="chatlog" id="chatlogNav" hidden><svg><use href="#i-chat"/></svg>บันทึกแชท</button>
         <button class="nav-item" data-view="network" id="netNav" hidden><svg><use href="#i-gear"/></svg>ตั้งค่าระบบ</button>
       </div>
     </nav>
@@ -201,6 +202,19 @@
       </form>
       <div class="card table-wrap"><table class="table act-table" id="actTable"></table></div>
       <div class="act-more"><button class="btn ghost" id="actMore" hidden>โหลดเพิ่ม</button></div>
+    </section>
+
+    <!-- chat log (super admin) -->
+    <section id="viewChatlog" hidden>
+      <div class="toolbar"><h2>บันทึกแชท</h2>
+        <div class="tool-actions"><button class="btn ghost" id="clRefresh"><svg><use href="#i-recycle"/></svg><span>รีเฟรช</span></button></div></div>
+      <p class="muted act-intro">ใครส่งข้อความถึงใคร เมื่อไหร่ · ห้องกลุ่มแสดงเนื้อหา · ข้อความส่วนตัวแสดงเฉพาะผู้ส่ง ผู้รับ และเวลา (ไม่แสดงเนื้อหา) · เห็นเฉพาะผู้ดูแลสูงสุด</p>
+      <form class="act-filters" id="clFilters">
+        <select name="user"><option value="">ทุกคน</option></select>
+        <select name="kind"><option value="">ทุกแบบ</option><option value="dm">ข้อความส่วนตัว</option><option value="room">ห้องกลุ่ม</option></select>
+      </form>
+      <div class="card table-wrap"><table class="table act-table" id="clTable"></table></div>
+      <div class="act-more"><button class="btn ghost" id="clMore" hidden>โหลดเพิ่ม</button></div>
     </section>
 
     <!-- chat view -->

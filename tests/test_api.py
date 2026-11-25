@@ -353,6 +353,23 @@ class ApiTests(unittest.TestCase):
         self.assertTrue((TMP / "share" / "Marketing" / "plan.txt").is_file())
         shutil.rmtree(TMP / "share" / "Marketing")
 
+    def test_chat_log_for_admin(self):
+        boss, acc, hr, ed = self.as_("boss"), self.as_("acc"), self.as_("hr"), self.as_("ed")
+        a, h = self.uid(acc), self.uid(hr)
+        acc.req("POST", "/api/chat/send", {"c": f"dm:{min(a, h)}-{max(a, h)}", "body": "เรื่องลับ"})
+        acc.req("POST", "/api/chat/send", {"c": "all", "body": "ประกาศทุกคน"})
+        self.assertEqual(ed.req("GET", "/api/chatlog")[0], 403)
+        self.assertEqual(acc.req("GET", "/api/chatlog")[0], 403)
+        s, r = boss.req("GET", f"/api/chatlog?user={a}")
+        self.assertEqual(s, 200)
+        dm = next(i for i in r["items"] if i["kind"] == "dm")
+        self.assertEqual((dm["to"], dm["body"], dm["chars"]), ("hr", None, len("เรื่องลับ")))   # content hidden
+        room = next(i for i in r["items"] if i["kind"] == "all")
+        self.assertEqual(room["body"], "ประกาศทุกคน")
+        self.assertNotIn("เรื่องลับ", json.dumps(r, ensure_ascii=False))
+        only_dm = boss.req("GET", "/api/chatlog?kind=dm")[1]["items"]
+        self.assertTrue(only_dm and all(i["kind"] == "dm" for i in only_dm))
+
     def test_chat_reactions(self):
         acc, ed, hr = self.as_("acc"), self.as_("ed"), self.as_("hr")
         mid = acc.req("POST", "/api/chat/send", {"c": "dept:Accounting", "body": "ส่งงบแล้วนะ"})[1]["message"]["id"]
