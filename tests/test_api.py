@@ -353,6 +353,21 @@ class ApiTests(unittest.TestCase):
         self.assertTrue((TMP / "share" / "Marketing" / "plan.txt").is_file())
         shutil.rmtree(TMP / "share" / "Marketing")
 
+    def test_chat_reactions(self):
+        acc, ed, hr = self.as_("acc"), self.as_("ed"), self.as_("hr")
+        mid = acc.req("POST", "/api/chat/send", {"c": "dept:Accounting", "body": "ส่งงบแล้วนะ"})[1]["message"]["id"]
+        a, e = self.uid(acc), self.uid(ed)
+        s, r = ed.req("POST", "/api/chat/react", {"id": mid, "emoji": "❤️"})
+        self.assertEqual((s, r["reactions"]), (200, {"❤️": [e]}))
+        acc.req("POST", "/api/chat/react", {"id": mid, "emoji": "👍"})
+        self.assertEqual(sorted(ed.req("POST", "/api/chat/react", {"id": mid, "emoji": "👍"})[1]["reactions"]["👍"]), sorted([a, e]))  # changed
+        self.assertEqual(ed.req("POST", "/api/chat/react", {"id": mid, "emoji": "👍"})[1]["reactions"], {"👍": [a]})     # same again = remove
+        msg = next(m for m in acc.req("GET", "/api/chat/messages?c=dept:Accounting")[1]["messages"] if m["id"] == mid)
+        self.assertEqual(msg["reactions"], {"👍": [a]})
+        self.assertEqual(ed.req("POST", "/api/chat/react", {"id": mid, "emoji": "🍕"})[0], 400)      # only the six
+        self.assertEqual(hr.req("POST", "/api/chat/react", {"id": mid, "emoji": "👍"})[0], 404)      # not in that room
+        self.assertEqual(ed.req("POST", "/api/chat/react", {"id": 999999, "emoji": "👍"})[0], 404)
+
     def test_chat_images(self):
         acc, hr, ed = self.as_("acc"), self.as_("hr"), self.as_("ed")
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 300

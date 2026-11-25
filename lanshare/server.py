@@ -101,6 +101,9 @@ def init_db() -> None:
               id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, sender INTEGER NOT NULL,
               sender_name TEXT NOT NULL, body TEXT NOT NULL, ts INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS chat_conv ON chat_messages(conv, id);
+            CREATE TABLE IF NOT EXISTS chat_reactions(
+              msg_id INTEGER NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, ts INTEGER NOT NULL,
+              PRIMARY KEY(msg_id, user_id));
             CREATE TABLE IF NOT EXISTS chat_read(
               user_id INTEGER NOT NULL, conv TEXT NOT NULL, last_id INTEGER NOT NULL,
               PRIMARY KEY(user_id, conv));
@@ -471,7 +474,7 @@ class ChatHub:
             except queue.Full:
                 pass
 
-    def publish(self, conv: str, payload: dict) -> None:
+    def publish(self, conv: str, payload: dict, event: str = "msg") -> None:
         with self.lock:
             subs = list(self.subs.items())
         allowed: dict[int, bool] = {}
@@ -484,7 +487,7 @@ class ChatHub:
         for q, uid in subs:
             if allowed.get(uid):
                 try:
-                    q.put_nowait(("msg", data))
+                    q.put_nowait((event, data))
                 except queue.Full:
                     pass
 
@@ -528,6 +531,22 @@ CHAT_IMAGES = DATA / "chat-images"
 CHAT_IMAGE_MAX = 10 * 1024 * 1024
 
 
+REACTIONS = ("👍", "❤️", "😆", "😮", "😢", "😡")
+
+
+def reactions_for(con: sqlite3.Connection, ids: list[int]) -> dict[int, dict[str, list[int]]]:
+    """{message id: {emoji: [user ids in the order they reacted]}}"""
+    out: dict[int, dict[str, list[int]]] = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        if not chunk:
+            continue
+        for r in con.execute(f"SELECT msg_id, user_id, emoji FROM chat_reactions WHERE msg_id IN ({','.join('?' * len(chunk))}) "
+                             "ORDER BY ts", chunk):
+            out.setdefault(r["msg_id"], {}).setdefault(r["emoji"], []).append(r["user_id"])
+    return out
+
+
 def forget_user_chat(con: sqlite3.Connection, uid: int) -> None:
     """On account deletion: drop their private chats, keep room messages under their old name."""
     for (img,) in con.execute("SELECT image FROM chat_messages WHERE image<>'' AND (conv LIKE ? OR conv LIKE ?)",
@@ -536,6 +555,7 @@ def forget_user_chat(con: sqlite3.Connection, uid: int) -> None:
     con.execute("DELETE FROM chat_messages WHERE conv LIKE ? OR conv LIKE ?", (f"dm:{uid}-%", f"dm:%-{uid}"))
     con.execute("DELETE FROM chat_read WHERE user_id=? OR conv LIKE ? OR conv LIKE ?", (uid, f"dm:{uid}-%", f"dm:%-{uid}"))
     con.execute("UPDATE chat_messages SET sender=0 WHERE sender=?", (uid,))    # ids may be reused later
+    con.execute("DELETE FROM chat_reactions WHERE user_id=? OR msg_id NOT IN (SELECT id FROM chat_messages)", (uid,))
 
 
 def parent_vpath(parts: list[str]) -> str:
@@ -1192,7 +1212,12 @@ class Handler(BaseHTTPRequestHandler):
         with db() as con:
             rows = con.execute(CHAT_SELECT + "WHERE m.conv=? AND (?=0 OR m.id<?) ORDER BY m.id DESC LIMIT 60",
                                (conv, before, before)).fetchall()
-        self.send_json(200, {"messages": [chat_row(r) for r in reversed(rows)], "more": len(rows) == 60})
+        msgs = [chat_row(r) for r in reversed(rows)]
+        with db() as con:
+            reacts = reactions_for(con, [m["id"] for m in msgs])
+        for m in msgs:
+            m["reactions"] = reacts.get(m["id"], {})
+        self.send_json(200, {"messages": msgs, "more": len(rows) == 60})
 
     def chat_post(self, u: dict, conv: str, body: str, image: str = "") -> dict:
         """Store a message (text and/or picture), mark it read for the sender, push it live."""
@@ -1215,6 +1240,32 @@ class Handler(BaseHTTPRequestHandler):
             msg = chat_row(con.execute(CHAT_SELECT + "WHERE m.id=?", (mid,)).fetchone())
         CHAT.publish(conv, msg)
         return msg
+
+    def api_post_chat_react(self):
+        """Messenger-style: one reaction per person per message; same emoji again removes it."""
+        u = self.require_user()
+        b = self.read_json()
+        emoji = str(b.get("emoji", ""))
+        if emoji and emoji not in REACTIONS:
+            raise ApiError(400, "ไม่รองรับอีโมจินี้")
+        mid = int(b["id"]) if str(b.get("id", "")).isdigit() else -1
+        with db() as con:
+            row = con.execute("SELECT conv, sender FROM chat_messages WHERE id=?", (mid,)).fetchone()
+        if not row or not chat_access(u, row["conv"]):
+            raise ApiError(404, "ไม่พบข้อความนี้")
+        with _db_lock, db() as con:
+            cur = con.execute("SELECT emoji FROM chat_reactions WHERE msg_id=? AND user_id=?", (mid, u["id"])).fetchone()
+            if not emoji or (cur and cur["emoji"] == emoji):
+                con.execute("DELETE FROM chat_reactions WHERE msg_id=? AND user_id=?", (mid, u["id"]))
+                emoji = ""
+            else:
+                con.execute("INSERT INTO chat_reactions VALUES(?,?,?,?) ON CONFLICT(msg_id, user_id) "
+                            "DO UPDATE SET emoji=excluded.emoji, ts=excluded.ts", (mid, u["id"], emoji, int(time.time())))
+            reactions = reactions_for(con, [mid]).get(mid, {})
+        event = {"id": mid, "conv": row["conv"], "reactions": reactions, "by": u["id"], "by_name": u["display_name"],
+                 "emoji": emoji, "owner": row["sender"]}
+        CHAT.publish(row["conv"], event, "react")
+        self.send_json(200, event)
 
     def api_post_chat_send(self):
         u = self.require_user()

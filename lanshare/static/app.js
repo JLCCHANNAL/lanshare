@@ -690,6 +690,7 @@ function chatConnect() {
   chat.es = es;
   es.addEventListener('msg', (e) => onChatMsg(JSON.parse(e.data)));
   es.addEventListener('presence', (e) => onPresence(JSON.parse(e.data)));
+  es.addEventListener('react', (e) => onReact(JSON.parse(e.data)));
   es.onopen = () => { if (state.view !== 'files') setLive(true); };
   es.onerror = () => { if (state.view !== 'files') setLive(false); };
 }
@@ -791,7 +792,7 @@ function renderHead() {
 function renderMsgs(keepTop) {
   const box = $('#chatMsgs');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-  const stick = !keepTop && (nearBottom || keepTop === false);
+  const stick = keepTop === 'stay' ? nearBottom : !keepTop && (nearBottom || keepTop === false);
   const oldH = box.scrollHeight, oldTop = box.scrollTop;
   const dm = convInfo(chat.conv)?.kind === 'dm';
   let html = chat.more ? `<div class="chat-more"><button class="btn ghost" id="chatMore">ดูข้อความก่อนหน้า</button></div>` : '';
@@ -803,16 +804,19 @@ function renderMsgs(keepTop) {
     const cont = prev && prev.sender === m.sender && m.ts - prev.ts < 300;
     const av = mine ? '' : cont ? '<span class="avatar ghost"></span>'
       : `<span class="avatar">${m.gone ? '?' : avatarInner({ id: m.sender, avatar: m.avatar, display_name: m.name, username: m.name })}</span>`;
-    html += `<div class="msg ${mine ? 'mine' : ''} ${cont ? 'cont' : ''}">${av}<div class="bubble-wrap">
+    html += `<div class="msg ${mine ? 'mine' : ''} ${cont ? 'cont' : ''} ${Object.keys(m.reactions || {}).length ? 'has-react' : ''}" data-mid="${m.id}">${av}<div class="bubble-wrap">
       ${!mine && !cont && !dm ? `<b class="who">${esc(m.name)}${m.gone ? ' <i>(ลบบัญชีแล้ว)</i>' : ''}</b>` : ''}
-      <div class="bubble ${m.image ? 'has-img' : ''}">${m.image ? `<button class="chat-img" data-img="${m.id}" aria-label="ดูรูปขนาดเต็ม"><img src="/api/chat/image?id=${m.id}" alt="รูปภาพ" loading="lazy"></button>` : ''}${m.body ? `<span class="text">${linkify(esc(m.body))}</span>` : ''}<time title="${esc(new Date(m.ts * 1000).toLocaleString('th-TH'))}">${hhmm(m.ts)}</time></div></div></div>`;
+      <div class="bubble ${m.image ? 'has-img' : ''}">${m.image ? `<button class="chat-img" data-img="${m.id}" aria-label="ดูรูปขนาดเต็ม"><img src="/api/chat/image?id=${m.id}" alt="รูปภาพ" loading="lazy"></button>` : ''}${m.body ? `<span class="text">${linkify(esc(m.body))}</span>` : ''}<time title="${esc(new Date(m.ts * 1000).toLocaleString('th-TH'))}">${hhmm(m.ts)}</time></div>${reactsHtml(m)}<button class="react-btn" data-react="${m.id}" aria-label="แสดงความรู้สึก" title="แสดงความรู้สึก">${icon('smile')}</button></div></div>`;
     prev = m;
   }
   if (!chat.msgs.length) html += `<div class="empty"><div class="big">${icon('chat')}</div><b>เริ่มบทสนทนา</b>พิมพ์ข้อความด้านล่าง แล้วกด Enter</div>`;
   box.innerHTML = html;
-  if (keepTop) box.scrollTop = box.scrollHeight - oldH + oldTop;
+  if (keepTop === 'stay') box.scrollTop = nearBottom ? box.scrollHeight : oldTop;
+  else if (keepTop) box.scrollTop = box.scrollHeight - oldH + oldTop;
   else if (nearBottom || keepTop === false) box.scrollTop = box.scrollHeight;
   $('#chatMore')?.addEventListener('click', loadOlder);
+  $$('#chatMsgs [data-react]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); reactPicker(b); }));
+  $$('#chatMsgs [data-chip]').forEach((b) => (b.onclick = () => react(+b.dataset.chip, b.dataset.emoji)));
   $$('#chatMsgs [data-img]').forEach((b) => (b.onclick = () => viewChatImage(b.dataset.img)));
   $$('#chatMsgs .chat-img img').forEach((im) => im.addEventListener('load', () => { if (stick) box.scrollTop = box.scrollHeight; }, { once: true }));
 }
@@ -854,6 +858,38 @@ $('#chatForm').onsubmit = async (e) => {
     addSent(message);
   } catch (err) { fail(err); t.value = body; growChat(); }
 };
+// ---- reactions (Messenger style): one per person per message, same one again removes it
+const REACTIONS = ['👍', '❤️', '😆', '😮', '😢', '😡'];
+const whoName = (id) => (id === state.me.id ? 'คุณ' : chat.people.find((p) => p.id === id)?.display_name || 'ผู้ใช้');
+function reactsHtml(m) {
+  const r = Object.entries(m.reactions || {}).sort((a, b) => b[1].length - a[1].length);
+  if (!r.length) return '';
+  return `<div class="reacts">${r.map(([e, ids]) => `<button class="react-chip ${ids.includes(state.me.id) ? 'on' : ''}" data-chip="${m.id}" data-emoji="${e}"
+    title="${esc(ids.map(whoName).join(', '))}">${e}<b>${ids.length}</b></button>`).join('')}</div>`;
+}
+function reactPicker(btn) {
+  const ctx = $('#ctx'), mid = +btn.dataset.react;
+  const m = chat.msgs.find((x) => x.id === mid);
+  const mineNow = Object.entries(m?.reactions || {}).find(([, ids]) => ids.includes(state.me.id))?.[0];
+  ctx.innerHTML = `<div class="react-pick">${REACTIONS.map((e) => `<button class="${e === mineNow ? 'on' : ''}" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}</div>`;
+  ctx.classList.add('react-ctx');
+  ctx.hidden = false;
+  const r = btn.getBoundingClientRect();
+  ctx.style.left = Math.min(window.innerWidth - ctx.offsetWidth - 8, Math.max(8, r.left + r.width / 2 - ctx.offsetWidth / 2)) + 'px';
+  ctx.style.top = Math.max(8, r.top - ctx.offsetHeight - 6) + 'px';
+  $$('[data-e]', ctx).forEach((b) => (b.onclick = (ev) => { ev.stopPropagation(); ctx.hidden = true; react(mid, b.dataset.e); }));
+}
+async function react(mid, emoji) {
+  try { onReact(await api('/api/chat/react', { method: 'POST', json: { id: mid, emoji } })); } catch (e) { fail(e); }
+}
+function onReact(ev) {
+  const m = chat.msgs.find((x) => x.id === ev.id);
+  if (m && chat.conv === ev.conv) { m.reactions = ev.reactions; renderMsgs('stay'); }
+  const viewing = state.view === 'chat' && chat.conv === ev.conv && !document.hidden;
+  if (ev.owner === state.me.id && ev.by !== state.me.id && ev.emoji && !viewing) toast(`${ev.by_name} แสดงความรู้สึก ${ev.emoji} ต่อข้อความของคุณ`, 'info');
+}
+document.addEventListener('click', (e) => { if (!e.target.closest('#ctx')) { $('#ctx').classList.remove('react-ctx'); } });
+
 function addSent(message) {
   if (!chat.msgs.some((x) => x.id === message.id)) { chat.msgs.push(message); renderMsgs(false); }
   const c = chat.convs.find((x) => x.id === chat.conv);

@@ -649,3 +649,33 @@ h2 { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
 .img-preview { display: grid; place-items: center; background: var(--surface-2); border-radius: 12px; padding: 8px; margin-bottom: 14px; }
 .img-preview img { max-width: 100%; max-height: 50vh; border-radius: 8px; }
 .modal .actions a.btn { text-decoration: none; color: inherit; }
+/* ---- reactions */
+.bubble-wrap { position: relative; }
+.react-btn { position: absolute; top: 50%; transform: translateY(-50%); right: -38px; width: 30px; height: 30px; border-radius: 50%;
+  border: 0; background: var(--surface); color: var(--muted); box-shadow: var(--shadow); display: grid; place-items: center;
+  opacity: 0; transition: opacity .12s; }
+.msg.has-react .react-btn { top: calc(50% - 12px); }
+.react-btn svg { width: 18px; height: 18px; }
+.msg.mine .react-btn { right: auto; left: -38px; }
+.msg:hover .react-btn, .react-btn:focus-visible { opacity: 1; }
+@media (hover: none) { .react-btn { opacity: .55; } }
+.react-btn:hover { color: rgb(var(--a)); }
+.reacts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: -6px; padding: 0 8px; position: relative; z-index: 1; }
+.msg.mine .reacts { justify-content: flex-end; }
+.react-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); background: var(--surface); border-radius: 99px;
+  padding: 1px 8px 1px 6px; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.react-chip b { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.react-chip.on { border-color: rgb(var(--a) / .55); background: rgb(var(--a) / .1); }
+.react-chip:hover { border-color: rgb(var(--a) / .6); }
+#ctx.react-ctx { padding: 4px; border-radius: 99px; min-width: 0; }
+.react-pick { display: flex; gap: 2px; }
+.react-pick button { width: 42px; height: 42px; border: 0; background: transparent; border-radius: 50%; font-size: 24px; line-height: 1;
+  display: grid; place-items: center; padding: 0; transition: transform .12s, background .12s; }
+.react-pick button:hover { transform: scale(1.25); background: var(--surface-2); }
+.react-pick button.on { background: rgb(var(--a) / .14); }
+.msg { padding: 0 40px; }
+.msg.mine { padding: 0 0 0 40px; }
+.chat-msgs { overflow-x: hidden; }
+.bubble-wrap { min-width: 0; max-width: 100%; }
+.chat-img img { max-width: min(320px, 100%); }
+.bubble.has-img { max-width: 100%; }
